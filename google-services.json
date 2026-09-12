@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "128389437905",
+    "project_id": "angel-s-avenue-53b39",
+    "storage_bucket": "angel-s-avenue-53b39.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:128389437905:android:ff597220f34b94c33928f0",
+        "android_client_info": {
+          "package_name": "com.angelsavenue.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA0Aw0K3aLnzLy9qx6HPcidNE8rclb2_Qk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
