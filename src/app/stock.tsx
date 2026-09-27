@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../firebaseConfig';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, getDoc } from 'firebase/firestore';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 const TIME_RANGES = [
@@ -66,12 +66,14 @@ export default function StockScreen() {
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   const [viewingBill, setViewingBill] = useState<any>(null);
   const [viewModalVisible, setViewModalVisible] = useState(false);
   const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
 
   const [reduceStockList, setReduceStockList] = useState<any[]>([]);
+  const [userData, setUserData] = useState<any>(null);
+  const [resolvedShopId, setResolvedShopId] = useState<string | null>(null);
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -80,66 +82,102 @@ export default function StockScreen() {
       return;
     }
 
-    const billsRef = collection(db, 'shops', user.uid, 'purchase_stock');
-    const q = query(billsRef, orderBy('createdAt', 'desc'));
+    const initData = async () => {
+      let shopId = user.uid;
+      let uData: any = null;
 
-    const unsub = onSnapshot(q, (snapshot) => {
-      let flattenedItems: any[] = [];
-      let raw: any[] = [];
-      let srCounter = 1;
-
-      snapshot.docs.forEach(doc => {
-        const billData = doc.data();
-        raw.push({ id: doc.id, ...billData });
-        const purchaseDateStr = billData.purchaseDate?.toDate
-          ? billData.purchaseDate.toDate().toLocaleDateString()
-          : '';
-
-        if (billData.items && Array.isArray(billData.items)) {
-          billData.items.forEach((item: any) => {
-            const purchaseQty = item.qty || 0;
-            const sellQty = item.sellQty || 0;
-            const purchasePrice = item.price || 0;
-
-            flattenedItems.push({
-              id: `${doc.id}-${srCounter}`,
-              sr: srCounter++,
-              name: item.name || 'Unknown',
-              purchaseQty,
-              sellQty,
-              availableQty: purchaseQty - sellQty,
-              purchasePrice,
-              totalPurchase: purchaseQty * purchasePrice,
-              availableValue: (purchaseQty - sellQty) * purchasePrice,
-              purchaseDate: purchaseDateStr,
-            });
-          });
+      try {
+        let docSnap = await getDoc(doc(db, 'salesmen', user.uid));
+        if (docSnap.exists()) {
+          uData = docSnap.data();
+          shopId = uData.shopId;
+        } else {
+          docSnap = await getDoc(doc(db, 'shops', user.uid));
+          if (docSnap.exists()) {
+            uData = docSnap.data();
+          }
         }
+      } catch (e) {
+        console.error("Error fetching user data", e);
+      }
+
+      setUserData(uData);
+      setResolvedShopId(shopId);
+
+      if (!shopId) {
+        setLoading(false);
+        return;
+      }
+
+      const billsRef = collection(db, 'shops', shopId, 'purchase_stock');
+      const q = query(billsRef, orderBy('createdAt', 'desc'));
+
+      const unsub = onSnapshot(q, (snapshot) => {
+        let flattenedItems: any[] = [];
+        let raw: any[] = [];
+        let srCounter = 1;
+
+        snapshot.docs.forEach(doc => {
+          raw.push({ id: doc.id, ...doc.data() });
+          const billData = doc.data();
+          
+          let purchaseDateStr = 'Unknown';
+          if (billData.purchaseDate?.toDate) {
+            purchaseDateStr = billData.purchaseDate.toDate().toLocaleDateString();
+          }
+          
+          if (billData.items && Array.isArray(billData.items)) {
+            billData.items.forEach((item: any) => {
+              const purchaseQty = item.qty || 0;
+              const sellQty = item.sellQty || 0;
+              const purchasePrice = item.price || 0;
+
+              flattenedItems.push({
+                id: `${doc.id}-${srCounter}`,
+                sr: srCounter++,
+                name: item.name || 'Unknown',
+                purchaseQty,
+                sellQty,
+                availableQty: purchaseQty - sellQty,
+                purchasePrice,
+                totalPurchase: purchaseQty * purchasePrice,
+                availableValue: (purchaseQty - sellQty) * purchasePrice,
+                purchaseDate: purchaseDateStr,
+              });
+            });
+          }
+        });
+
+        // Sort items by available quantity (descending)
+        flattenedItems.sort((a, b) => b.availableQty - a.availableQty);
+
+        // Reassign serial numbers after sorting
+        flattenedItems.forEach((item, index) => {
+          item.sr = index + 1;
+        });
+
+        setRawBills(raw);
+        setStockItems(flattenedItems);
+        setLoading(false);
       });
 
-      // Sort items by available quantity (descending)
-      flattenedItems.sort((a, b) => b.availableQty - a.availableQty);
-
-      // Reassign serial numbers after sorting
-      flattenedItems.forEach((item, index) => {
-        item.sr = index + 1;
+      // Also fetch reduce_stock for selling history
+      const reduceRef = collection(db, 'shops', shopId, 'reduce_stock');
+      const rq = query(reduceRef, orderBy('date', 'desc'));
+      const unsubReduce = onSnapshot(rq, (snapshot) => {
+        const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        setReduceStockList(data);
       });
 
-      setRawBills(raw);
-      setStockItems(flattenedItems);
-      setLoading(false);
-    });
+      return () => {
+        unsub();
+        unsubReduce();
+      };
+    };
 
-    const reduceRef = collection(db, 'shops', user.uid, 'reduce_stock');
-    const rq = query(reduceRef, orderBy('date', 'desc'));
-    const unsubReduce = onSnapshot(rq, (snapshot) => {
-      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      setReduceStockList(data);
-    });
-
+    const cleanupPromise = initData();
     return () => {
-      unsub();
-      unsubReduce();
+      cleanupPromise.then(cleanup => cleanup && cleanup());
     };
   }, []);
 
@@ -240,7 +278,7 @@ export default function StockScreen() {
       const name = item.name?.trim() || '';
       if (!name) return;
       if (!stats[name]) stats[name] = { totalBuyValue: 0, totalBuyQty: 0, totalSellQty: 0 };
-      
+
       stats[name].totalBuyQty += (item.purchaseQty || 0);
       stats[name].totalBuyValue += (item.purchaseQty || 0) * (item.purchasePrice || 0);
       stats[name].totalSellQty += (item.sellQty || 0);
@@ -299,7 +337,7 @@ export default function StockScreen() {
       const stats = itemStats[name];
       const avgBuyPrice = stats && stats.totalBuyQty > 0 ? stats.totalBuyValue / stats.totalBuyQty : 0;
       const availableQty = stats ? stats.totalBuyQty - stats.totalSellQty : 0;
-      
+
       const sellingQty = sell.qty || 0;
       const totalSellValue = sell.totalAmount || 0;
       const totalBuyValue = sellingQty * avgBuyPrice;
@@ -333,24 +371,26 @@ export default function StockScreen() {
 
       <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.tabContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScrollContent}>
-          <TouchableOpacity 
-            style={[styles.tabBtn, activeTab === 'current' && styles.activeTabBtn]} 
+          <TouchableOpacity
+            style={[styles.tabBtn, activeTab === 'current' && styles.activeTabBtn]}
             onPress={() => setActiveTab('current')}
           >
             <Text style={[styles.tabText, activeTab === 'current' && styles.activeTabText]}>Current Stock</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tabBtn, activeTab === 'history' && styles.activeTabBtn]} 
+          <TouchableOpacity
+            style={[styles.tabBtn, activeTab === 'history' && styles.activeTabBtn]}
             onPress={() => setActiveTab('history')}
           >
             <Text style={[styles.tabText, activeTab === 'history' && styles.activeTabText]}>Stock History</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tabBtn, activeTab === 'selling' && styles.activeTabBtn]} 
-            onPress={() => setActiveTab('selling')}
-          >
-            <Text style={[styles.tabText, activeTab === 'selling' && styles.activeTabText]}>Selling History</Text>
-          </TouchableOpacity>
+          {userData?.role !== 'Sales Man' && (
+            <TouchableOpacity
+              style={[styles.tabBtn, activeTab === 'selling' && styles.activeTabBtn]}
+              onPress={() => setActiveTab('selling')}
+            >
+              <Text style={[styles.tabText, activeTab === 'selling' && styles.activeTabText]}>Selling History</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       </Animated.View>
 
@@ -626,7 +666,7 @@ export default function StockScreen() {
                                 <Text style={[
                                   styles.tableCellText,
                                   col.key === 'totalProfit' && (val as number) > 0 ? { color: THEME.success } :
-                                  col.key === 'totalProfit' && (val as number) < 0 ? { color: '#ff4d4d' } : {}
+                                    col.key === 'totalProfit' && (val as number) < 0 ? { color: '#ff4d4d' } : {}
                                 ]}>
                                   {displayVal}
                                 </Text>
@@ -680,7 +720,7 @@ export default function StockScreen() {
             {/* View Modal Header */}
             <View style={[styles.modalHeader, {
               padding: 24, paddingBottom: 16, marginBottom: 0, backgroundColor: THEME.cardBg,
-               borderBottomWidth: 1, borderBottomColor: THEME.border
+              borderBottomWidth: 1, borderBottomColor: THEME.border
             }]}>
               <Text style={styles.modalTitle}>Bill Details</Text>
               <TouchableOpacity onPress={() => setViewModalVisible(false)}>
@@ -717,7 +757,7 @@ export default function StockScreen() {
                   {viewingBill.items && viewingBill.items.map((item: any, idx: number) => (
                     <View key={idx} style={{
                       backgroundColor: THEME.cardBg,
-                       padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: THEME.border
+                      padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: THEME.border
                     }}>
                       <Text style={{ color: THEME.textMain, fontSize: 16, fontWeight: '600', marginBottom: 8 }}>{item.name}</Text>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -866,7 +906,7 @@ const styles = StyleSheet.create({
   tableHeader: {
     flexDirection: 'row',
     backgroundColor: THEME.cardBg,
-        borderBottomWidth: 1,
+    borderBottomWidth: 1,
     borderBottomColor: THEME.border,
   },
   tableHeaderCell: {
@@ -901,7 +941,7 @@ const styles = StyleSheet.create({
   },
   timeRangeContainer: {
     marginBottom: 16,
-    marginHorizontal: -16, 
+    marginHorizontal: -16,
   },
   timeRangeScroll: {
     paddingHorizontal: 16,

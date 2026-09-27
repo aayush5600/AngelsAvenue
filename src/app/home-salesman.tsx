@@ -22,7 +22,10 @@ const THEME = {
 
 const MENU_ITEMS = [
   { id: '1', title: 'Sales Entry', icon: 'edit-3', subtitle: 'Record new sales', route: '/sales-entry' },
-  { id: '3', title: 'My Sales Report', icon: 'bar-chart-2', subtitle: 'View your sales', route: '/salesman-report' },
+  { id: '2', title: 'My Sales Report', icon: 'bar-chart-2', subtitle: 'View your sales', route: '/salesman-report' },
+  { id: '3', title: 'My Stock', icon: 'box', subtitle: 'Check inventory levels', route: '/stock' },
+  { id: '4', title: 'Add Stock', icon: 'plus-square', subtitle: 'Add new items to stock', route: '/add-stock' },
+  { id: '5', title: 'Add Expense', icon: 'dollar-sign', subtitle: 'Log daily expenses', route: '/shop-expense' },
 ];
 
 export default function HomeSalesmanScreen() {

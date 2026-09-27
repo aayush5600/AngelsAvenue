@@ -35,7 +35,7 @@ export default function SalesEntryScreen() {
   const [sales, setSales] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
-  
+
   // Generic / Calculated Amount
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
@@ -44,8 +44,9 @@ export default function SalesEntryScreen() {
   const [originalItems, setOriginalItems] = useState<SaleItem[]>([]);
 
   const [items, setItems] = useState<SaleItem[]>([]);
-  const [availableStock, setAvailableStock] = useState<{name: string, available: number}[]>([]);
+  const [availableStock, setAvailableStock] = useState<{ name: string, available: number }[]>([]);
   const [showDropdownFor, setShowDropdownFor] = useState<string | null>(null);
+  const [itemSearchQuery, setItemSearchQuery] = useState('');
   const [paymentType, setPaymentType] = useState<'Cash' | 'Online'>('Cash');
   const [entryDate, setEntryDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -164,14 +165,14 @@ export default function SalesEntryScreen() {
     setAmount(item.amount.toString());
     setDescription(item.description || '');
     setPaymentType(item.paymentType || 'Cash');
-    
+
     const formattedItems = item.items ? item.items.map((i: any, idx: number) => ({
       id: Date.now().toString() + idx,
       name: i.name,
       price: i.price.toString(),
       qty: i.qty.toString()
     })) : [];
-    
+
     setItems(formattedItems);
     setOriginalItems(formattedItems);
 
@@ -323,7 +324,7 @@ export default function SalesEntryScreen() {
       // Check available stock if there are items
       const batch = writeBatch(db);
       const billsToUpdate: Record<string, any> = {};
-      
+
       if (items.length > 0) {
         const billsRef = collection(db, 'shops', resolvedShopId, 'purchase_stock');
         const q = query(billsRef, orderBy('createdAt', 'asc'));
@@ -479,7 +480,7 @@ export default function SalesEntryScreen() {
           <View style={{ flexShrink: 0, maxWidth: '40%', alignItems: 'flex-end' }}>
             <Text style={styles.amountText} numberOfLines={1} adjustsFontSizeToFit>₹{item.amount}</Text>
             {item.items && item.items.length > 0 && (
-                <Text style={{ color: THEME.accent, fontSize: 12 }}>{item.items.length} items</Text>
+              <Text style={{ color: THEME.accent, fontSize: 12 }}>{item.items.length} items</Text>
             )}
           </View>
         </View>
@@ -577,148 +578,171 @@ export default function SalesEntryScreen() {
               </View>
 
               <ScrollView contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Date & Time</Text>
-                <View style={styles.dateTimeRow}>
-                  <TouchableOpacity style={styles.dateTimeBtn} onPress={() => setShowDatePicker(true)}>
-                    <Feather name="calendar" size={16} color={THEME.textSub} style={{ marginRight: 8 }} />
-                    <Text style={styles.dateTimeText}>{entryDate.toLocaleDateString()}</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity style={styles.dateTimeBtn} onPress={() => setShowTimePicker(true)}>
-                    <Feather name="clock" size={16} color={THEME.textSub} style={{ marginRight: 8 }} />
-                    <Text style={styles.dateTimeText}>
-                      {entryDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Payment Type</Text>
-                <View style={styles.radioGroup}>
-                  <TouchableOpacity
-                    style={[styles.radioBtn, paymentType === 'Cash' && styles.radioBtnActive]}
-                    onPress={() => setPaymentType('Cash')}
-                  >
-                    <Feather name="dollar-sign" size={16} color={paymentType === 'Cash' ? THEME.accent : THEME.textSub} />
-                    <Text style={[styles.radioText, paymentType === 'Cash' && styles.radioTextActive]}>Cash</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.radioBtn, paymentType === 'Online' && styles.radioBtnActive]}
-                    onPress={() => setPaymentType('Online')}
-                  >
-                    <Feather name="smartphone" size={16} color={paymentType === 'Online' ? THEME.accent : THEME.textSub} />
-                    <Text style={[styles.radioText, paymentType === 'Online' && styles.radioTextActive]}>Online</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.itemsHeader}>
-                <Text style={styles.label}>Items Sold (Optional)</Text>
-              </View>
-
-              {items.map((item, index) => (
-                <View key={item.id} style={styles.itemBox}>
-                  <View style={styles.itemBoxHeader}>
-                    <Text style={styles.itemBoxTitle}>Item #{index + 1}</Text>
-                    <TouchableOpacity onPress={() => {
-                        setItems(prev => prev.filter(i => i.id !== item.id));
-                    }}>
-                        <Feather name="trash-2" size={18} color="#ff4444" />
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Date & Time</Text>
+                  <View style={styles.dateTimeRow}>
+                    <TouchableOpacity style={styles.dateTimeBtn} onPress={() => setShowDatePicker(true)}>
+                      <Feather name="calendar" size={16} color={THEME.textSub} style={{ marginRight: 8 }} />
+                      <Text style={styles.dateTimeText}>{entryDate.toLocaleDateString()}</Text>
                     </TouchableOpacity>
-                  </View>
 
-                  <View style={{ zIndex: showDropdownFor === item.id ? 1000 : 1 }}>
-                    <TouchableOpacity 
-                        style={styles.dropdownBtn} 
-                        onPress={() => setShowDropdownFor(showDropdownFor === item.id ? null : item.id)}
-                    >
-                      <Text style={[styles.dropdownBtnText, !item.name && { color: THEME.textSub }]}>
-                        {item.name || "Choose item..."}
+                    <TouchableOpacity style={styles.dateTimeBtn} onPress={() => setShowTimePicker(true)}>
+                      <Feather name="clock" size={16} color={THEME.textSub} style={{ marginRight: 8 }} />
+                      <Text style={styles.dateTimeText}>
+                        {entryDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </Text>
-                      <Feather name={showDropdownFor === item.id ? "chevron-up" : "chevron-down"} size={20} color={THEME.textSub} />
                     </TouchableOpacity>
-
-                    {showDropdownFor === item.id && (
-                      <View style={styles.dropdownList}>
-                        <ScrollView nestedScrollEnabled style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled">
-                            {availableStock.length === 0 ? (
-                            <Text style={{ color: THEME.textSub, padding: 16 }}>No items in stock.</Text>
-                            ) : (
-                            availableStock.map((stock) => (
-                                <TouchableOpacity
-                                key={stock.name}
-                                style={styles.dropdownItem}
-                                onPress={() => {
-                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, name: stock.name } : i));
-                                    setShowDropdownFor(null);
-                                }}
-                                >
-                                <Text style={styles.dropdownItemName}>{stock.name}</Text>
-                                <Text style={styles.dropdownItemQty}>{stock.available} in stock</Text>
-                                </TouchableOpacity>
-                            ))
-                            )}
-                        </ScrollView>
-                      </View>
-                    )}
-                  </View>
-
-                  <View style={styles.row}>
-                    <TextInput
-                      style={[styles.input, { flex: 1, marginRight: 8, marginTop: 12 }]}
-                      placeholder="Price (₹)"
-                      placeholderTextColor={THEME.textSub}
-                      keyboardType="numeric"
-                      value={item.price}
-                      onChangeText={(val) => setItems(prev => prev.map(i => i.id === item.id ? { ...i, price: val } : i))}
-                    />
-                    <TextInput
-                      style={[styles.input, { flex: 1, marginLeft: 8, marginTop: 12 }]}
-                      placeholder="Qty"
-                      placeholderTextColor={THEME.textSub}
-                      keyboardType="numeric"
-                      value={item.qty}
-                      onChangeText={(val) => setItems(prev => prev.map(i => i.id === item.id ? { ...i, qty: val } : i))}
-                    />
                   </View>
                 </View>
-              ))}
 
-              <TouchableOpacity 
-                style={styles.addItemBtn} 
-                onPress={() => setItems(prev => [...prev, { id: Date.now().toString(), name: '', price: '', qty: '' }])}
-              >
-                <Feather name="plus" size={18} color={THEME.accent} style={{ marginRight: 8 }} />
-                <Text style={styles.addItemText}>Add Item</Text>
-              </TouchableOpacity>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Payment Type</Text>
+                  <View style={styles.radioGroup}>
+                    <TouchableOpacity
+                      style={[styles.radioBtn, paymentType === 'Cash' && styles.radioBtnActive]}
+                      onPress={() => setPaymentType('Cash')}
+                    >
+                      <Feather name="dollar-sign" size={16} color={paymentType === 'Cash' ? THEME.accent : THEME.textSub} />
+                      <Text style={[styles.radioText, paymentType === 'Cash' && styles.radioTextActive]}>Cash</Text>
+                    </TouchableOpacity>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>{items.length > 0 ? "Total Amount (Auto-calculated)" : "Total Amount"}</Text>
-                <TextInput
-                  style={[styles.input, items.length > 0 && { opacity: 0.5 }]}
-                  placeholder="0.00"
-                  placeholderTextColor={THEME.textSub}
-                  value={displayAmount}
-                  onChangeText={setAmount}
-                  keyboardType="numeric"
-                  editable={items.length === 0}
-                />
-              </View>
+                    <TouchableOpacity
+                      style={[styles.radioBtn, paymentType === 'Online' && styles.radioBtnActive]}
+                      onPress={() => setPaymentType('Online')}
+                    >
+                      <Feather name="smartphone" size={16} color={paymentType === 'Online' ? THEME.accent : THEME.textSub} />
+                      <Text style={[styles.radioText, paymentType === 'Online' && styles.radioTextActive]}>Online</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Description</Text>
-                <TextInput
-                  style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-                  placeholder="Enter details..."
-                  placeholderTextColor={THEME.textSub}
-                  value={description}
-                  onChangeText={setDescription}
-                  multiline
-                />
-              </View>
+                <View style={styles.itemsHeader}>
+                  <Text style={styles.label}>Items Sold (Optional)</Text>
+                </View>
+
+                {items.map((item, index) => (
+                  <View key={item.id} style={styles.itemBox}>
+                    <View style={styles.itemBoxHeader}>
+                      <Text style={styles.itemBoxTitle}>Item #{index + 1}</Text>
+                      <TouchableOpacity onPress={() => {
+                        setItems(prev => prev.filter(i => i.id !== item.id));
+                      }}>
+                        <Feather name="trash-2" size={18} color="#ff4444" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={{ zIndex: showDropdownFor === item.id ? 1000 : 1 }}>
+                      <TouchableOpacity
+                        style={styles.dropdownBtn}
+                        onPress={() => {
+                          setShowDropdownFor(showDropdownFor === item.id ? null : item.id);
+                          setItemSearchQuery('');
+                        }}
+                      >
+                        <Text style={[styles.dropdownBtnText, !item.name && { color: THEME.textSub }]}>
+                          {item.name || "Choose item..."}
+                        </Text>
+                        <Feather name={showDropdownFor === item.id ? "chevron-up" : "chevron-down"} size={20} color={THEME.textSub} />
+                      </TouchableOpacity>
+
+                      {showDropdownFor === item.id && (
+                        <View style={styles.dropdownList}>
+                          <View style={{ padding: 8, borderBottomWidth: 1, borderBottomColor: THEME.border }}>
+                            <TextInput
+                              style={{
+                                backgroundColor: THEME.bg,
+                                color: THEME.textMain,
+                                paddingHorizontal: 12,
+                                paddingVertical: 8,
+                                borderRadius: 8,
+                                borderWidth: 1,
+                                borderColor: THEME.border
+                              }}
+                              placeholder="Search items..."
+                              placeholderTextColor={THEME.textSub}
+                              value={itemSearchQuery}
+                              onChangeText={setItemSearchQuery}
+                            />
+                          </View>
+                          <ScrollView nestedScrollEnabled style={{ maxHeight: 400 }} keyboardShouldPersistTaps="handled">
+                            {availableStock.filter(stock => stock.name.toLowerCase().includes(itemSearchQuery.toLowerCase())).length === 0 ? (
+                              <Text style={{ color: THEME.textSub, padding: 16 }}>No items found.</Text>
+                            ) : (
+                              availableStock
+                                .filter(stock => stock.name.toLowerCase().includes(itemSearchQuery.toLowerCase()))
+                                .map((stock) => (
+                                  <TouchableOpacity
+                                    key={stock.name}
+                                    style={styles.dropdownItem}
+                                    onPress={() => {
+                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, name: stock.name } : i));
+                                      setShowDropdownFor(null);
+                                      setItemSearchQuery('');
+                                    }}
+                                  >
+                                    <Text style={styles.dropdownItemName}>{stock.name}</Text>
+                                    <Text style={styles.dropdownItemQty}>{stock.available} in stock</Text>
+                                  </TouchableOpacity>
+                                ))
+                            )}
+                          </ScrollView>
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={styles.row}>
+                      <TextInput
+                        style={[styles.input, { flex: 1, marginRight: 8, marginTop: 12 }]}
+                        placeholder="Price (₹)"
+                        placeholderTextColor={THEME.textSub}
+                        keyboardType="numeric"
+                        value={item.price}
+                        onChangeText={(val) => setItems(prev => prev.map(i => i.id === item.id ? { ...i, price: val } : i))}
+                      />
+                      <TextInput
+                        style={[styles.input, { flex: 1, marginLeft: 8, marginTop: 12 }]}
+                        placeholder="Qty"
+                        placeholderTextColor={THEME.textSub}
+                        keyboardType="numeric"
+                        value={item.qty}
+                        onChangeText={(val) => setItems(prev => prev.map(i => i.id === item.id ? { ...i, qty: val } : i))}
+                      />
+                    </View>
+                  </View>
+                ))}
+
+                <TouchableOpacity
+                  style={styles.addItemBtn}
+                  onPress={() => setItems(prev => [...prev, { id: Date.now().toString(), name: '', price: '', qty: '' }])}
+                >
+                  <Feather name="plus" size={18} color={THEME.accent} style={{ marginRight: 8 }} />
+                  <Text style={styles.addItemText}>Add Item</Text>
+                </TouchableOpacity>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>{items.length > 0 ? "Total Amount (Auto-calculated)" : "Total Amount"}</Text>
+                  <TextInput
+                    style={[styles.input, items.length > 0 && { opacity: 0.5 }]}
+                    placeholder="0.00"
+                    placeholderTextColor={THEME.textSub}
+                    value={displayAmount}
+                    onChangeText={setAmount}
+                    keyboardType="numeric"
+                    editable={items.length === 0}
+                  />
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Description</Text>
+                  <TextInput
+                    style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
+                    placeholder="Enter details..."
+                    placeholderTextColor={THEME.textSub}
+                    value={description}
+                    onChangeText={setDescription}
+                    multiline
+                  />
+                </View>
               </ScrollView>
 
               <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={saving}>
@@ -831,7 +855,7 @@ const styles = StyleSheet.create({
   },
   filterSection: {
     backgroundColor: THEME.cardBg,
-        padding: 16,
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: THEME.border,
   },
@@ -890,7 +914,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: THEME.cardBg,
-        borderRadius: 16,
+    borderRadius: 16,
     padding: 16,
     marginBottom: 16,
     borderWidth: 1,
@@ -976,7 +1000,7 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: THEME.cardBg,
-        borderTopLeftRadius: 24,
+    borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
     paddingBottom: Platform.OS === 'ios' ? 40 : 24,
@@ -1086,7 +1110,7 @@ const styles = StyleSheet.create({
   dropdownBtnText: { color: THEME.textMain, fontSize: 16 },
   dropdownList: {
     backgroundColor: THEME.cardBg,
-    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, marginTop: 8, maxHeight: 200
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, marginTop: 8, maxHeight: 400
   },
   dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: THEME.border },
   dropdownItemName: { color: THEME.textMain, fontSize: 16, fontWeight: '500' },

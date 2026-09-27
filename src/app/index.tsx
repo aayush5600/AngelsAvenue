@@ -68,7 +68,6 @@ export default function LoginScreen() {
         }
       } else {
         if (isMounted) {
-          setAuthError('User is null from Firebase');
           setCheckingAuth(false);
         }
       }
@@ -81,16 +80,6 @@ export default function LoginScreen() {
   }, []);
 
   const handleLogin = async () => {
-    if (!email && !password) {
-      setTimeout(() => {
-        router.replace({
-          pathname: '/home',
-          params: { email: 'admin@example.com' }
-        });
-      }, 0);
-      return;
-    }
-
     if (!email || !password) return;
     setLoading(true);
     try {

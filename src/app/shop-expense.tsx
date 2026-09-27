@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, TextInpu
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, Timestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, serverTimestamp, Timestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { auth, db } from '../firebaseConfig';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
@@ -27,6 +27,8 @@ interface ExpenseEntry {
   amount: number;
   date: Date;
   createdAt?: any;
+  salesmanId?: string;
+  salesmanName?: string;
 }
 
 export default function ShopExpenseScreen() {
@@ -35,6 +37,9 @@ export default function ShopExpenseScreen() {
   // List State
   const [expenses, setExpenses] = useState<ExpenseEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userData, setUserData] = useState<any>(null);
+  const [resolvedShopId, setResolvedShopId] = useState<string | null>(null);
+  const [isSalesman, setIsSalesman] = useState(false);
 
   // Filter State
   const [fromDate, setFromDate] = useState(new Date());
@@ -62,25 +67,67 @@ export default function ShopExpenseScreen() {
     const user = auth.currentUser;
     if (!user) return;
 
-    // Listen to expenses
-    const ref = collection(db, 'shops', user.uid, 'shop_expense');
-    const q = query(ref, orderBy('date', 'desc'));
+    const initData = async () => {
+      let shopId = user.uid;
+      let uData: any = null;
+      let salesman = false;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => {
-        const d = doc.data();
-        return {
-          id: doc.id,
-          title: d.title,
-          amount: d.amount,
-          date: d.date?.toDate ? d.date.toDate() : new Date(),
-        };
+      try {
+        let docSnap = await getDoc(doc(db, 'salesmen', user.uid));
+        if (docSnap.exists()) {
+          salesman = true;
+          uData = docSnap.data();
+          shopId = uData.shopId;
+        } else {
+          docSnap = await getDoc(doc(db, 'shops', user.uid));
+          if (docSnap.exists()) {
+            uData = docSnap.data();
+          }
+        }
+      } catch (e) {
+        console.error("Error fetching user data", e);
+      }
+
+      setUserData(uData);
+      setResolvedShopId(shopId);
+      setIsSalesman(salesman);
+
+      if (!shopId) {
+        setLoading(false);
+        return;
+      }
+
+      const ref = collection(db, 'shops', shopId, 'shop_expense');
+      const q = query(ref, orderBy('date', 'desc'));
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        let data = snapshot.docs.map(doc => {
+          const d = doc.data();
+          return {
+            id: doc.id,
+            title: d.title,
+            amount: d.amount,
+            date: d.date?.toDate ? d.date.toDate() : new Date(),
+            salesmanId: d.salesmanId,
+            salesmanName: d.salesmanName,
+          };
+        });
+
+        if (salesman) {
+          data = data.filter((s: any) => s.salesmanId === user.uid);
+        }
+
+        setExpenses(data);
+        setLoading(false);
       });
-      setExpenses(data);
-      setLoading(false);
-    });
 
-    return () => unsubscribe();
+      return () => unsubscribe();
+    };
+
+    const cleanupPromise = initData();
+    return () => {
+      cleanupPromise.then(cleanup => cleanup && cleanup());
+    };
   }, []);
 
   const filteredExpenses = useMemo(() => {
@@ -142,9 +189,9 @@ export default function ShopExpenseScreen() {
               setOptionsModalVisible(false);
               setLoading(true);
               const user = auth.currentUser;
-              if (!user) return;
+              if (!user || !resolvedShopId) return;
 
-              const ref = doc(db, 'shops', user.uid, 'shop_expense', selectedExpense.id);
+              const ref = doc(db, 'shops', resolvedShopId, 'shop_expense', selectedExpense.id);
               await deleteDoc(ref);
 
               setLoading(false);
@@ -171,23 +218,28 @@ export default function ShopExpenseScreen() {
     }
 
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user || !resolvedShopId) return;
 
     setSaving(true);
     try {
+      const payload: any = {
+        title: expenseTitle.trim(),
+        amount: amount,
+        date: Timestamp.fromDate(expenseDate),
+      };
+
+      if (isSalesman && !editingId) {
+        payload.salesmanId = user.uid;
+        payload.salesmanName = userData?.name || 'Salesman';
+      }
+
       if (editingId) {
-        const expenseRef = doc(db, 'shops', user.uid, 'shop_expense', editingId);
-        await updateDoc(expenseRef, {
-          title: expenseTitle.trim(),
-          amount: amount,
-          date: Timestamp.fromDate(expenseDate),
-        });
+        const expenseRef = doc(db, 'shops', resolvedShopId, 'shop_expense', editingId);
+        await updateDoc(expenseRef, payload);
       } else {
-        const expenseRef = collection(db, 'shops', user.uid, 'shop_expense');
+        const expenseRef = collection(db, 'shops', resolvedShopId, 'shop_expense');
         await addDoc(expenseRef, {
-          title: expenseTitle.trim(),
-          amount: amount,
-          date: Timestamp.fromDate(expenseDate),
+          ...payload,
           createdAt: serverTimestamp()
         });
       }
@@ -209,6 +261,11 @@ export default function ShopExpenseScreen() {
         <View style={styles.cardInfo}>
           <Text style={styles.cardTitle}>{item.title}</Text>
           <Text style={styles.cardDate}>{item.date.toLocaleDateString()}</Text>
+          {item.salesmanName && (
+            <Text style={{ color: THEME.accent, fontSize: 12, marginTop: 4, fontWeight: '500' }}>
+              Added by: {item.salesmanName}
+            </Text>
+          )}
         </View>
         <View style={styles.cardAmountContainer}>
           <Text style={styles.cardAmount}>₹{item.amount.toLocaleString()}</Text>
@@ -327,7 +384,7 @@ export default function ShopExpenseScreen() {
 
             <TouchableOpacity style={[styles.optionBtn, {
               justifyContent: 'center', marginTop: 16, backgroundColor: THEME.cardBg,
-               borderRadius: 12
+              borderRadius: 12
             }]} onPress={() => setOptionsModalVisible(false)}>
               <Text style={[styles.optionText, { color: THEME.textSub }]}>Cancel</Text>
             </TouchableOpacity>
@@ -460,7 +517,7 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: THEME.cardBg,
-     borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: THEME.border, flexDirection: 'row', alignItems: 'center'
+    borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: THEME.border, flexDirection: 'row', alignItems: 'center'
   },
   cardIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#ff4d4d', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   cardInfo: { flex: 1 },
@@ -482,11 +539,11 @@ const styles = StyleSheet.create({
   label: { color: THEME.textSub, fontSize: 14, fontWeight: '600', marginBottom: 8, marginLeft: 4 },
   input: {
     backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16, color: THEME.textMain, fontSize: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16, color: THEME.textMain, fontSize: 16
   },
   dateBtn: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
   },
   dateText: { color: THEME.textMain, fontSize: 16 },
 

@@ -76,7 +76,7 @@ export default function SalesReportScreen() {
   const [expenses, setExpenses] = useState<any[]>([]);
   const [stockItems, setStockItems] = useState<any[]>([]);
   const [reduceStockList, setReduceStockList] = useState<any[]>([]);
-  
+
   const [selectedTimeRange, setSelectedTimeRange] = useState(TIME_RANGES[0]);
   const [metrics, setMetrics] = useState({
     totalSales: '₹0',
@@ -310,7 +310,10 @@ export default function SalesReportScreen() {
             <Feather name="arrow-left" size={24} color={THEME.textMain} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>My Sales Report</Text>
-          <View style={{ width: 24 }} />
+          <TouchableOpacity onPress={() => router.push('/dashboard')} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(212, 175, 55, 0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>
+            <Feather name="layout" size={16} color={THEME.accent} style={{ marginRight: 6 }} />
+            <Text style={{ color: THEME.accent, fontWeight: '600', fontSize: 14 }}>Dashboard</Text>
+          </TouchableOpacity>
         </Animated.View>
 
         {/* Time Range Selector */}
@@ -456,7 +459,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     backgroundColor: THEME.cardBg,
-        borderWidth: 1,
+    borderWidth: 1,
     borderColor: THEME.border,
   },
   timeRangePillSelected: {
@@ -486,7 +489,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: THEME.cardBg,
-        paddingVertical: 12,
+    paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: THEME.border,
@@ -507,7 +510,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
     backgroundColor: THEME.cardBg,
-        paddingVertical: 10,
+    paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: THEME.border,
@@ -528,7 +531,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: THEME.cardBg,
-        borderRadius: 24,
+    borderRadius: 24,
     padding: 20,
     borderWidth: 1,
     borderColor: THEME.border,

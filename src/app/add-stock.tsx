@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, TextInpu
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, Timestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, serverTimestamp, Timestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { auth, db } from '../firebaseConfig';
@@ -36,6 +36,8 @@ export default function AddStockScreen() {
   // List State
   const [bills, setBills] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userData, setUserData] = useState<any>(null);
+  const [resolvedShopId, setResolvedShopId] = useState<string | null>(null);
 
   // Modals State
   const [modalVisible, setModalVisible] = useState(false);
@@ -64,19 +66,54 @@ export default function AddStockScreen() {
       return;
     }
 
-    const billsRef = collection(db, 'shops', user.uid, 'purchase_stock');
-    const q = query(billsRef, orderBy('createdAt', 'desc'));
+    const initData = async () => {
+      let shopId = user.uid;
+      let uData: any = null;
+      let isSalesman = false;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setBills(data);
-      setLoading(false);
-    });
+      try {
+        let docSnap = await getDoc(doc(db, 'salesmen', user.uid));
+        if (docSnap.exists()) {
+          isSalesman = true;
+          uData = docSnap.data();
+          shopId = uData.shopId;
+        } else {
+          docSnap = await getDoc(doc(db, 'shops', user.uid));
+          if (docSnap.exists()) {
+            uData = docSnap.data();
+          }
+        }
+      } catch (e) {
+        console.error("Error fetching user data", e);
+      }
 
-    return () => unsubscribe();
+      setUserData(uData);
+      setResolvedShopId(shopId);
+
+      if (!shopId) {
+        setLoading(false);
+        return;
+      }
+
+      const billsRef = collection(db, 'shops', shopId, 'purchase_stock');
+      const q = query(billsRef, orderBy('createdAt', 'desc'));
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const data = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setBills(data);
+        setLoading(false);
+      });
+
+      return () => unsubscribe();
+    };
+
+    const cleanupPromise = initData();
+    return () => {
+      cleanupPromise.then(cleanup => cleanup && cleanup());
+    };
   }, []);
 
   const openAddBillModal = () => {
@@ -131,9 +168,9 @@ export default function AddStockScreen() {
           style: "destructive",
           onPress: async () => {
             const user = auth.currentUser;
-            if (!user) return;
+            if (!user || !resolvedShopId) return;
             try {
-              const billDocRef = doc(db, 'shops', user.uid, 'purchase_stock', viewingBill.id);
+              const billDocRef = doc(db, 'shops', resolvedShopId, 'purchase_stock', viewingBill.id);
               await deleteDoc(billDocRef);
               setViewModalVisible(false);
             } catch (error: any) {
@@ -217,7 +254,7 @@ export default function AddStockScreen() {
     }
 
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user || !resolvedShopId) return;
 
     setSaving(true);
     try {
@@ -236,11 +273,18 @@ export default function AddStockScreen() {
         items: parsedItems,
       };
 
+      const isSalesman = userData?.role === 'Sales Man';
+      if (isSalesman && !editingBillId) {
+        // Tag who added the stock if it's a salesman
+        (payload as any).addedBy = user.uid;
+        (payload as any).addedByName = userData.name || 'Salesman';
+      }
+
       if (editingBillId) {
-        const billDocRef = doc(db, 'shops', user.uid, 'purchase_stock', editingBillId);
+        const billDocRef = doc(db, 'shops', resolvedShopId, 'purchase_stock', editingBillId);
         await updateDoc(billDocRef, payload);
       } else {
-        const stockRef = collection(db, 'shops', user.uid, 'purchase_stock');
+        const stockRef = collection(db, 'shops', resolvedShopId, 'purchase_stock');
         await addDoc(stockRef, {
           ...payload,
           createdAt: serverTimestamp()
@@ -467,7 +511,7 @@ export default function AddStockScreen() {
             {/* View Modal Header */}
             <View style={[styles.modalHeader, {
               padding: 24, paddingBottom: 16, marginBottom: 0, backgroundColor: THEME.cardBg,
-               borderBottomWidth: 1, borderBottomColor: THEME.border
+              borderBottomWidth: 1, borderBottomColor: THEME.border
             }]}>
               <Text style={styles.modalTitle}>Bill Details</Text>
               <TouchableOpacity onPress={() => setViewModalVisible(false)}>
@@ -504,7 +548,7 @@ export default function AddStockScreen() {
                   {viewingBill.items && viewingBill.items.map((item: any, idx: number) => (
                     <View key={idx} style={{
                       backgroundColor: THEME.cardBg,
-                       padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: THEME.border
+                      padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: THEME.border
                     }}>
                       <Text style={{ color: THEME.textMain, fontSize: 16, fontWeight: '600', marginBottom: 8 }}>{item.name}</Text>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -586,7 +630,7 @@ const styles = StyleSheet.create({
   listContent: { padding: 16, paddingBottom: 100 },
   card: {
     backgroundColor: THEME.cardBg,
-     borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: THEME.border
+    borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: THEME.border
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   dateText: { color: THEME.textSub, fontSize: 13, fontWeight: '500' },
@@ -606,24 +650,24 @@ const styles = StyleSheet.create({
   label: { color: THEME.textSub, fontSize: 14, fontWeight: '600', marginBottom: 8, marginLeft: 4 },
   input: {
     backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16, color: THEME.textMain, fontSize: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16, color: THEME.textMain, fontSize: 16
   },
   imagePickerBtn: {
     backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, overflow: 'hidden', height: 160
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, overflow: 'hidden', height: 160
   },
   previewImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   imagePlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   imagePlaceholderText: { color: THEME.textSub, marginTop: 12, fontWeight: '600' },
   dateBtn: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
   },
   dateText: { color: THEME.textMain, fontSize: 16 },
   itemsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 8 },
   itemBox: {
     backgroundColor: THEME.cardBg,
-     padding: 16, borderRadius: 16, marginBottom: 16, borderWidth: 1, borderColor: THEME.border
+    padding: 16, borderRadius: 16, marginBottom: 16, borderWidth: 1, borderColor: THEME.border
   },
   itemBoxHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
   itemBoxTitle: { color: THEME.textMain, fontSize: 16, fontWeight: '600' },

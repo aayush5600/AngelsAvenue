@@ -67,7 +67,7 @@ const AnimatedCounter = ({ valueStr }: { valueStr: string }) => {
     requestAnimationFrame(updateCounter);
   }, [valueStr]);
 
-  return <Text style={styles.cardValue}>{displayValue}</Text>;
+  return <Text style={styles.cardValue} numberOfLines={1} adjustsFontSizeToFit>{displayValue}</Text>;
 };
 
 export default function AdminSalesReportScreen() {
@@ -75,6 +75,7 @@ export default function AdminSalesReportScreen() {
 
   const [sales, setSales] = useState<any[]>([]);
   const [stocks, setStocks] = useState<any[]>([]);
+  const [reduceStocks, setReduceStocks] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [shops, setShops] = useState<any[]>([]);
   const [selectedShopId, setSelectedShopId] = useState('all');
@@ -87,7 +88,8 @@ export default function AdminSalesReportScreen() {
     cashTotal: '₹0',
     onlineTotal: '₹0',
     stockValue: '₹0',
-    totalExpense: '₹0'
+    totalExpense: '₹0',
+    totalProfit: '₹0'
   });
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -107,6 +109,7 @@ export default function AdminSalesReportScreen() {
     let unsubStocks: any;
     let unsubExpenses: any;
     let unsubShops: any;
+    let unsubReduce: any;
 
     const loadData = async () => {
       // 1. Fetch Shops
@@ -144,6 +147,16 @@ export default function AdminSalesReportScreen() {
         setExpenses(data);
         setLoading(false);
       });
+
+      // 5. Fetch all reduce_stock using collectionGroup
+      unsubReduce = onSnapshot(collectionGroup(db, 'reduce_stock'), (snapshot) => {
+        const data = snapshot.docs.map(doc => ({
+          id: doc.id,
+          shopId: doc.ref.parent.parent?.id,
+          ...doc.data()
+        }));
+        setReduceStocks(data);
+      });
     };
 
     loadData();
@@ -153,6 +166,7 @@ export default function AdminSalesReportScreen() {
       if (unsubStocks) unsubStocks();
       if (unsubExpenses) unsubExpenses();
       if (unsubShops) unsubShops();
+      if (unsubReduce) unsubReduce();
     };
   }, []);
 
@@ -163,15 +177,17 @@ export default function AdminSalesReportScreen() {
     let shopFilteredSales = selectedShopId === 'all' ? sales : sales.filter(s => s.shopId === selectedShopId);
     let shopFilteredStocks = selectedShopId === 'all' ? stocks : stocks.filter(s => s.shopId === selectedShopId);
     let shopFilteredExpenses = selectedShopId === 'all' ? expenses : expenses.filter(s => s.shopId === selectedShopId);
+    let shopFilteredReduce = selectedShopId === 'all' ? reduceStocks : reduceStocks.filter(s => s.shopId === selectedShopId);
 
     // Filter Sales and Expenses by Time
     let timeFilteredSales = shopFilteredSales;
     let timeFilteredExpenses = shopFilteredExpenses;
+    let timeFilteredReduce = shopFilteredReduce;
 
     if (selectedTimeRange.id !== 'lifetime') {
-      timeFilteredSales = shopFilteredSales.filter(s => {
-        if (!s.createdAt?.toDate) return false;
-        const date = s.createdAt.toDate();
+      const isMatch = (dateObj: any) => {
+        if (!dateObj?.toDate) return false;
+        const date = dateObj.toDate();
 
         if (selectedTimeRange.id === 'custom') {
           let match = true;
@@ -204,44 +220,11 @@ export default function AdminSalesReportScreen() {
           return date.getFullYear() === now.getFullYear();
         }
         return true;
-      });
+      };
 
-      timeFilteredExpenses = shopFilteredExpenses.filter(e => {
-        if (!e.date?.toDate) return false;
-        const date = e.date.toDate();
-
-        if (selectedTimeRange.id === 'custom') {
-          let match = true;
-          if (fromDate) {
-            const from = new Date(fromDate);
-            from.setHours(0, 0, 0, 0);
-            if (date < from) match = false;
-          }
-          if (toDate) {
-            const to = new Date(toDate);
-            to.setHours(23, 59, 59, 999);
-            if (date > to) match = false;
-          }
-          return match;
-        }
-
-        if (selectedTimeRange.id === 'today') {
-          return date.toDateString() === now.toDateString();
-        }
-        if (selectedTimeRange.id === 'this_week') {
-          const diff = now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1);
-          const firstDay = new Date(now.setDate(diff));
-          firstDay.setHours(0, 0, 0, 0);
-          return date >= firstDay;
-        }
-        if (selectedTimeRange.id === 'this_month') {
-          return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-        }
-        if (selectedTimeRange.id === 'current_year') {
-          return date.getFullYear() === now.getFullYear();
-        }
-        return true;
-      });
+      timeFilteredSales = shopFilteredSales.filter(s => isMatch(s.createdAt));
+      timeFilteredExpenses = shopFilteredExpenses.filter(e => isMatch(e.date));
+      timeFilteredReduce = shopFilteredReduce.filter(r => isMatch(r.date));
     }
 
     // Calculate Sales Metrics
@@ -254,7 +237,10 @@ export default function AdminSalesReportScreen() {
 
     // Calculate Stock Metric (always lifetime based on available inventory)
     let stockTotalValue = 0;
+    const itemStats: Record<string, { totalBuyValue: number, totalBuyQty: number }> = {};
+
     shopFilteredStocks.forEach(bill => {
+      const shopId = bill.shopId;
       if (bill.items && Array.isArray(bill.items)) {
         bill.items.forEach((item: any) => {
           const purchaseQty = item.qty || 0;
@@ -264,8 +250,29 @@ export default function AdminSalesReportScreen() {
           if (availableQty > 0) {
             stockTotalValue += (availableQty * price);
           }
+
+          // Accumulate for profit calculation
+          const name = item.name?.trim() || '';
+          if (name) {
+            const key = `${shopId}_${name}`;
+            if (!itemStats[key]) itemStats[key] = { totalBuyValue: 0, totalBuyQty: 0 };
+            itemStats[key].totalBuyQty += purchaseQty;
+            itemStats[key].totalBuyValue += purchaseQty * price;
+          }
         });
       }
+    });
+
+    // Profit Calculation
+    let totalProfitAmount = 0;
+    timeFilteredReduce.forEach(sell => {
+      const name = sell.itemName?.trim() || '';
+      const key = `${sell.shopId}_${name}`;
+      const stats = itemStats[key];
+      const avgBuyPrice = stats && stats.totalBuyQty > 0 ? stats.totalBuyValue / stats.totalBuyQty : 0;
+      const totalBuyValue = (sell.qty || 0) * avgBuyPrice;
+      const totalProfit = (sell.totalAmount || 0) - totalBuyValue;
+      totalProfitAmount += totalProfit;
     });
 
     setMetrics({
@@ -273,11 +280,12 @@ export default function AdminSalesReportScreen() {
       cashTotal: `₹${cashTotal.toLocaleString()}`,
       onlineTotal: `₹${onlineTotal.toLocaleString()}`,
       stockValue: `₹${stockTotalValue.toLocaleString()}`,
-      totalExpense: `₹${expenseTotal.toLocaleString()}`
+      totalExpense: `₹${expenseTotal.toLocaleString()}`,
+      totalProfit: `₹${totalProfitAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
     });
 
     setRefreshKey(prev => prev + 1);
-  }, [sales, stocks, expenses, selectedShopId, selectedTimeRange, fromDate, toDate]);
+  }, [sales, stocks, expenses, reduceStocks, selectedShopId, selectedTimeRange, fromDate, toDate]);
 
   const handleSelectTimeRange = (range: typeof TIME_RANGES[0]) => {
     setSelectedTimeRange(range);
@@ -342,7 +350,10 @@ export default function AdminSalesReportScreen() {
             <Feather name="arrow-left" size={24} color={THEME.textMain} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Admin Sales Report</Text>
-          <View style={{ width: 24 }} />
+          <TouchableOpacity onPress={() => router.push('/dashboard')} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(212, 175, 55, 0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>
+            <Feather name="layout" size={16} color={THEME.accent} style={{ marginRight: 6 }} />
+            <Text style={{ color: THEME.accent, fontWeight: '600', fontSize: 14 }}>Dashboard</Text>
+          </TouchableOpacity>
         </Animated.View>
 
         {/* Shop Selector */}
@@ -423,10 +434,11 @@ export default function AdminSalesReportScreen() {
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
             <View style={styles.gridContainer}>
               {renderMetricCard('Total Sell', metrics.totalSales, 'trending-up', 0)}
-              {renderMetricCard('Cash Balance (Sell)', metrics.cashTotal, 'dollar-sign', 1)}
-              {renderMetricCard('Online Balance (Sell)', metrics.onlineTotal, 'smartphone', 2)}
-              {renderMetricCard('Total Stock (Rupees)', metrics.stockValue, 'box', 3)}
-              {renderMetricCard('Total Expense', metrics.totalExpense, 'minus-circle', 4)}
+              {renderMetricCard('Total Profit', metrics.totalProfit, 'pie-chart', 1)}
+              {renderMetricCard('Cash Bal (Sell)', metrics.cashTotal, 'dollar-sign', 2)}
+              {renderMetricCard('Online Bal (Sell)', metrics.onlineTotal, 'smartphone', 3)}
+              {renderMetricCard('Total Stock (₹)', metrics.stockValue, 'box', 4)}
+              {renderMetricCard('Total Expense', metrics.totalExpense, 'minus-circle', 5)}
             </View>
           </ScrollView>
         )}
@@ -536,7 +548,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: THEME.cardBg,
-        paddingHorizontal: 16,
+    paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 16,
     borderWidth: 1,
@@ -561,7 +573,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     backgroundColor: THEME.cardBg,
-        borderWidth: 1,
+    borderWidth: 1,
     borderColor: THEME.border,
   },
   timeRangePillSelected: {
@@ -591,7 +603,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: THEME.cardBg,
-        paddingVertical: 12,
+    paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: THEME.border,
@@ -612,7 +624,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
     backgroundColor: THEME.cardBg,
-        paddingVertical: 10,
+    paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: THEME.border,
@@ -633,7 +645,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: THEME.cardBg,
-        borderRadius: 24,
+    borderRadius: 24,
     padding: 20,
     borderWidth: 1,
     borderColor: THEME.border,

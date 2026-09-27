@@ -538,7 +538,7 @@ export default function ReduceStockScreen() {
 
             <TouchableOpacity style={[styles.optionBtn, {
               justifyContent: 'center', marginTop: 16, backgroundColor: THEME.cardBg,
-               borderRadius: 12
+              borderRadius: 12
             }]} onPress={() => setOptionsModalVisible(false)}>
               <Text style={[styles.optionText, { color: THEME.textSub }]}>Cancel</Text>
             </TouchableOpacity>
@@ -698,7 +698,7 @@ const styles = StyleSheet.create({
   listContent: { padding: 16, paddingBottom: 100 },
   card: {
     backgroundColor: THEME.cardBg,
-     borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: THEME.border
+    borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: THEME.border
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: THEME.border },
   itemName: { color: THEME.textMain, fontSize: 18, fontWeight: '700', flex: 1 },
@@ -718,20 +718,20 @@ const styles = StyleSheet.create({
   label: { color: THEME.textSub, fontSize: 14, fontWeight: '600', marginBottom: 8, marginLeft: 4 },
   input: {
     backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16, color: THEME.textMain, fontSize: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16, color: THEME.textMain, fontSize: 16
   },
   dateBtn: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
   },
   dropdownBtn: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
   },
   dropdownBtnText: { color: THEME.textMain, fontSize: 16 },
   dropdownList: {
     backgroundColor: THEME.cardBg,
-     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, marginTop: 8, maxHeight: 200
+    borderWidth: 1, borderColor: THEME.border, borderRadius: 12, marginTop: 8, maxHeight: 200
   },
   dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: THEME.border },
   dropdownItemName: { color: THEME.textMain, fontSize: 16, fontWeight: '500' },
