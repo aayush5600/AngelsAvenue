@@ -34,6 +34,8 @@ export default function DashboardScreen() {
   const [paymentStats, setPaymentStats] = useState<any[]>([]);
   const [totalIncome, setTotalIncome] = useState(0);
   const [totalProfit, setTotalProfit] = useState(0);
+  const [totalExpense, setTotalExpense] = useState(0);
+  const [deductExpenses, setDeductExpenses] = useState(false);
 
   // Raw Data for PDF
   const [allSales, setAllSales] = useState<any[]>([]);
@@ -155,6 +157,7 @@ export default function DashboardScreen() {
         });
 
         setTotalProfit(totalProf);
+        setTotalExpense(expenseData.reduce((sum, e) => sum + (e.amount || 0), 0));
 
         const colors = [THEME.accent, '#32d74b', '#0a84ff', '#ff3b30', '#ff9f0a', '#bf5af2', '#64d2ff'];
 
@@ -407,9 +410,19 @@ export default function DashboardScreen() {
                 <Text style={styles.summaryValue}>₹{totalIncome.toLocaleString()}</Text>
               </View>
               <View style={styles.summaryCard}>
-                <Feather name="pie-chart" size={20} color={THEME.success} />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <Feather name="pie-chart" size={20} color={THEME.success} />
+                  <TouchableOpacity 
+                    onPress={() => setDeductExpenses(!deductExpenses)} 
+                    style={{ backgroundColor: deductExpenses ? THEME.accent : THEME.border, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}
+                  >
+                    <Text style={{ fontSize: 10, color: deductExpenses ? '#fff' : THEME.textMain }}>
+                      {deductExpenses ? 'Net (After Exp)' : 'Gross (Pre Exp)'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
                 <Text style={styles.summaryLabel}>Total Profit</Text>
-                <Text style={styles.summaryValue}>₹{Math.floor(totalProfit).toLocaleString()}</Text>
+                <Text style={styles.summaryValue}>₹{Math.floor(deductExpenses ? totalProfit - totalExpense : totalProfit).toLocaleString()}</Text>
               </View>
             </Animated.View>
 

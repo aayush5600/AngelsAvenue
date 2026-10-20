@@ -14,8 +14,8 @@ const firebaseConfig = {
   measurementId: "G-G5V0HKHLHQ"
 };
 
-let app;
-let auth;
+let app: any;
+let auth: any;
 
 if (getApps().length === 0) {
   app = initializeApp(firebaseConfig);

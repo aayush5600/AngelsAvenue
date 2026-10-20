@@ -8,6 +8,8 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { auth, db } from '../firebaseConfig';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -28,6 +30,7 @@ interface BillItem {
   price: string;
   qty: string;
   remark: string;
+  isReturn?: boolean;
 }
 
 export default function AddStockScreen() {
@@ -48,6 +51,8 @@ export default function AddStockScreen() {
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [viewingBill, setViewingBill] = useState<any>(null);
   const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
+  const [selectingItemFor, setSelectingItemFor] = useState<string | null>(null);
+  const [stockSearchQuery, setStockSearchQuery] = useState('');
 
   const [billImage, setBillImage] = useState<string | null>(null);
   const [purchaseDate, setPurchaseDate] = useState(new Date());
@@ -56,7 +61,7 @@ export default function AddStockScreen() {
 
   // Items Array
   const [items, setItems] = useState<BillItem[]>([
-    { id: Date.now().toString(), name: '', price: '', qty: '', remark: '' }
+    { id: Date.now().toString(), name: '', price: '', qty: '', remark: '', isReturn: false }
   ]);
 
   useEffect(() => {
@@ -87,41 +92,48 @@ export default function AddStockScreen() {
         console.error("Error fetching user data", e);
       }
 
-      setUserData(uData);
-      setResolvedShopId(shopId);
-
-      if (!shopId) {
-        setLoading(false);
-        return;
+      const storedShopId = await SafeStorage.getItem('selectedShopId');
+      if (storedShopId && storedShopId !== 'all') {
+        shopId = storedShopId;
       }
 
-      const billsRef = collection(db, 'shops', shopId, 'purchase_stock');
-      const q = query(billsRef, orderBy('createdAt', 'desc'));
-
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        setBills(data);
-        setLoading(false);
-      });
-
-      return () => unsubscribe();
+      setUserData(uData);
+      setResolvedShopId(shopId);
     };
 
-    const cleanupPromise = initData();
-    return () => {
-      cleanupPromise.then(cleanup => cleanup && cleanup());
-    };
+    initData();
   }, []);
+
+  // Subscribe to purchase bills for resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setBills([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const billsRef = collection(db, 'shops', resolvedShopId, 'purchase_stock');
+    const q = query(billsRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setBills(data);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [resolvedShopId]);
 
   const openAddBillModal = () => {
     setEditingBillId(null);
     setBillImage(null);
     setPurchaseDate(new Date());
     setBillRemark('');
-    setItems([{ id: Date.now().toString(), name: '', price: '', qty: '', remark: '' }]);
+    setItems([{ id: Date.now().toString(), name: '', price: '', qty: '', remark: '', isReturn: false }]);
     setModalVisible(true);
   };
 
@@ -143,12 +155,13 @@ export default function AddStockScreen() {
         id: Date.now().toString() + index,
         name: i.name,
         price: i.price.toString(),
-        qty: i.qty.toString(),
-        remark: i.remark || ''
+        qty: Math.abs(i.qty).toString(),
+        remark: i.remark || '',
+        isReturn: i.isReturn || false
       }));
       setItems(formattedItems);
     } else {
-      setItems([{ id: Date.now().toString(), name: '', price: '', qty: '', remark: '' }]);
+      setItems([{ id: Date.now().toString(), name: '', price: '', qty: '', remark: '', isReturn: false }]);
     }
 
     setViewModalVisible(false);
@@ -225,12 +238,36 @@ export default function AddStockScreen() {
     }
   };
 
-  const updateItem = (id: string, field: keyof BillItem, value: string) => {
+  const updateItem = (id: string, field: keyof BillItem, value: any) => {
     setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
   };
 
+  const stockItemsList = React.useMemo(() => {
+    const itemMap = new Map<string, { name: string, price: string, key: string }>();
+    bills.forEach(bill => {
+      if (bill.items && Array.isArray(bill.items)) {
+        bill.items.forEach((item: any) => {
+          if (item.name && !item.isReturn) {
+            const price = parseFloat(item.price) || 0;
+            const key = `${item.name}-${price}`;
+            if (!itemMap.has(key)) {
+              itemMap.set(key, { name: item.name, price: price.toString(), key });
+            }
+          }
+        });
+      }
+    });
+    let list = Array.from(itemMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+    
+    if (stockSearchQuery.trim()) {
+      const q = stockSearchQuery.toLowerCase().trim();
+      list = list.filter(i => i.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [bills, stockSearchQuery]);
+
   const addItem = () => {
-    setItems(prev => [...prev, { id: Date.now().toString() + Math.random(), name: '', price: '', qty: '', remark: '' }]);
+    setItems(prev => [...prev, { id: Date.now().toString() + Math.random(), name: '', price: '', qty: '', remark: '', isReturn: false }]);
   };
 
   const removeItem = (id: string) => {
@@ -241,7 +278,8 @@ export default function AddStockScreen() {
   const totalAmount = items.reduce((sum, item) => {
     const p = parseFloat(item.price) || 0;
     const q = parseFloat(item.qty) || 0;
-    return sum + (p * q);
+    const itemTotal = p * q;
+    return sum + (item.isReturn ? -itemTotal : itemTotal);
   }, 0);
 
   const handleSave = async () => {
@@ -258,12 +296,16 @@ export default function AddStockScreen() {
 
     setSaving(true);
     try {
-      const parsedItems = items.map(item => ({
-        name: item.name.trim(),
-        price: parseFloat(item.price) || 0,
-        qty: parseFloat(item.qty) || 0,
-        remark: item.remark.trim()
-      }));
+      const parsedItems = items.map(item => {
+        const parsedQty = parseFloat(item.qty) || 0;
+        return {
+          name: item.name.trim(),
+          price: parseFloat(item.price) || 0,
+          qty: item.isReturn ? -parsedQty : parsedQty,
+          isReturn: item.isReturn || false,
+          remark: item.remark.trim()
+        };
+      });
 
       const payload = {
         purchaseDate: Timestamp.fromDate(purchaseDate),
@@ -338,6 +380,15 @@ export default function AddStockScreen() {
         <View style={{ width: 40 }} />
       </View>
 
+      {/* Shop Selector */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+        <ShopSelectorBar
+          compact
+          selectedShopId={resolvedShopId}
+          onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+        />
+      </View>
+
       {/* Main List */}
       <View style={styles.container}>
         {loading ? (
@@ -407,7 +458,7 @@ export default function AddStockScreen() {
                 <Text style={styles.label}>Purchase Date</Text>
                 <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
                   <Feather name="calendar" size={18} color={THEME.textSub} style={{ marginRight: 12 }} />
-                  <Text style={styles.dateText}>{purchaseDate.toLocaleDateString()}</Text>
+                  <Text style={styles.formDateText}>{purchaseDate.toLocaleDateString()}</Text>
                 </TouchableOpacity>
               </View>
 
@@ -428,30 +479,49 @@ export default function AddStockScreen() {
 
               {items.map((item, index) => (
                 <View key={item.id} style={styles.itemBox}>
-                  <View style={styles.itemBoxHeader}>
+                  <View style={[styles.itemBoxHeader, { alignItems: 'center' }]}>
                     <Text style={styles.itemBoxTitle}>Item #{index + 1}</Text>
-                    {items.length > 1 && (
-                      <TouchableOpacity onPress={() => removeItem(item.id)}>
-                        <Feather name="trash-2" size={18} color="#ff4444" />
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <TouchableOpacity 
+                        style={{ marginRight: 16, flexDirection: 'row', alignItems: 'center' }}
+                        onPress={() => updateItem(item.id, 'isReturn', !item.isReturn)}
+                      >
+                        <Feather name={item.isReturn ? "check-square" : "square"} size={18} color={item.isReturn ? "#ff4444" : THEME.textSub} />
+                        <Text style={{ marginLeft: 8, color: item.isReturn ? "#ff4444" : THEME.textSub, fontWeight: '600' }}>Return</Text>
                       </TouchableOpacity>
-                    )}
+                      {items.length > 1 && (
+                        <TouchableOpacity onPress={() => removeItem(item.id)}>
+                          <Feather name="trash-2" size={18} color="#ff4444" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   </View>
 
-                  <TextInput
-                    style={[styles.input, { marginBottom: 12 }]}
-                    placeholder="Item Name"
-                    placeholderTextColor={THEME.textSub}
-                    value={item.name}
-                    onChangeText={(val) => updateItem(item.id, 'name', val)}
-                  />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }, item.isReturn && { opacity: 0.5 }]}
+                      placeholder={item.isReturn ? "Select Item ->" : "Item Name (New or Select)"}
+                      placeholderTextColor={THEME.textSub}
+                      value={item.name}
+                      editable={!item.isReturn}
+                      onChangeText={(val) => updateItem(item.id, 'name', val)}
+                    />
+                    <TouchableOpacity 
+                      style={{ marginLeft: 8, padding: 16, backgroundColor: THEME.cardBg, borderRadius: 12, borderWidth: 1, borderColor: THEME.border, justifyContent: 'center', alignItems: 'center' }}
+                      onPress={() => setSelectingItemFor(item.id)}
+                    >
+                      <Feather name="list" size={20} color={THEME.accent} />
+                    </TouchableOpacity>
+                  </View>
 
                   <View style={styles.row}>
                     <TextInput
-                      style={[styles.input, { flex: 1, marginRight: 8 }]}
+                      style={[styles.input, { flex: 1, marginRight: 8 }, item.isReturn && { opacity: 0.5 }]}
                       placeholder="Price (₹)"
                       placeholderTextColor={THEME.textSub}
                       keyboardType="numeric"
                       value={item.price}
+                      editable={!item.isReturn}
                       onChangeText={(val) => updateItem(item.id, 'price', val)}
                     />
                     <TextInput
@@ -494,6 +564,52 @@ export default function AddStockScreen() {
               )}
             </TouchableOpacity>
 
+            {!!selectingItemFor && (
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: THEME.bg, borderRadius: 24, padding: 24, zIndex: 10 }]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Select Stock Item</Text>
+                  <TouchableOpacity onPress={() => setSelectingItemFor(null)}>
+                    <Feather name="x" size={24} color={THEME.textSub} />
+                  </TouchableOpacity>
+                </View>
+                
+                <View style={{ marginBottom: 16 }}>
+                  <TextInput
+                    style={[styles.input, { paddingVertical: 12 }]}
+                    placeholder="Search items..."
+                    placeholderTextColor={THEME.textSub}
+                    value={stockSearchQuery}
+                    onChangeText={setStockSearchQuery}
+                  />
+                </View>
+                
+                {stockItemsList.length === 0 ? (
+                  <View style={styles.centerContent}>
+                    <Text style={styles.emptyText}>No stock items found.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={stockItemsList}
+                    keyExtractor={(item) => item.key}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        style={{ paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: THEME.border, flexDirection: 'row', justifyContent: 'space-between' }}
+                        onPress={() => {
+                          if (selectingItemFor) {
+                            setItems(prev => prev.map(i => i.id === selectingItemFor ? { ...i, name: item.name, price: item.price } : i));
+                            setSelectingItemFor(null);
+                            setStockSearchQuery('');
+                          }
+                        }}
+                      >
+                        <Text style={{ color: THEME.textMain, fontSize: 16 }}>{item.name}</Text>
+                        <Text style={{ color: THEME.accent, fontSize: 16, fontWeight: '600' }}>₹{item.price}</Text>
+                      </TouchableOpacity>
+                    )}
+                  />
+                )}
+              </View>
+            )}
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -550,10 +666,14 @@ export default function AddStockScreen() {
                       backgroundColor: THEME.cardBg,
                       padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: THEME.border
                     }}>
-                      <Text style={{ color: THEME.textMain, fontSize: 16, fontWeight: '600', marginBottom: 8 }}>{item.name}</Text>
+                      <Text style={{ color: THEME.textMain, fontSize: 16, fontWeight: '600', marginBottom: 8 }}>
+                        {item.name} {item.isReturn ? <Text style={{color: '#ff4444'}}>(Returned)</Text> : null}
+                      </Text>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <Text style={{ color: THEME.textSub, fontSize: 14 }}>{item.qty} x ₹{(item.price || 0).toLocaleString()}</Text>
-                        <Text style={{ color: THEME.textMain, fontSize: 14, fontWeight: '700' }}>₹{((item.qty || 0) * (item.price || 0)).toLocaleString()}</Text>
+                        <Text style={{ color: THEME.textSub, fontSize: 14 }}>{Math.abs(item.qty)} x ₹{(item.price || 0).toLocaleString()}</Text>
+                        <Text style={{ color: item.isReturn ? '#ff4444' : THEME.textMain, fontSize: 14, fontWeight: '700' }}>
+                          {item.isReturn ? '-' : ''}₹{(Math.abs(item.qty || 0) * (item.price || 0)).toLocaleString()}
+                        </Text>
                       </View>
                       {item.remark ? (
                         <Text style={{ color: THEME.textSub, fontSize: 13, marginTop: 4, fontStyle: 'italic' }}>{item.remark}</Text>
@@ -615,6 +735,7 @@ export default function AddStockScreen() {
           onDismiss={() => setShowDatePicker(false)}
         />
       )}
+
     </SafeAreaView>
   );
 }
@@ -663,7 +784,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', backgroundColor: THEME.cardBg,
     borderWidth: 1, borderColor: THEME.border, borderRadius: 12, padding: 16
   },
-  dateText: { color: THEME.textMain, fontSize: 16 },
+  formDateText: { color: THEME.textMain, fontSize: 16 },
   itemsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 8 },
   itemBox: {
     backgroundColor: THEME.cardBg,

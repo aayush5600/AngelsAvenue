@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, Modal, ScrollView, TextInput, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, ScrollView, Dimensions, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInDown, FadeInUp, useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import { db, auth } from '../firebaseConfig';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, getDoc, doc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -16,15 +18,13 @@ const THEME = {
   textMain: '#ffffff',
   textSub: '#8e8e93',
   border: '#2c2c2e',
-  success: '#32d74b'
+  success: '#32d74b',
+  danger: '#ff4d4d'
 };
-
 
 const { width } = Dimensions.get('window');
 const CARD_MARGIN = 16;
 const CARD_WIDTH = (width - 48 - CARD_MARGIN) / 2;
-
-
 
 const TIME_RANGES = [
   { id: 'lifetime', label: 'Lifetime' },
@@ -35,38 +35,109 @@ const TIME_RANGES = [
   { id: 'custom', label: 'Custom' },
 ];
 
+// Helper to safely parse dates in any format (Firestore Timestamp, Date, string, numeric timestamp)
+const parseSafeDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (typeof val.toDate === 'function') {
+    try { return val.toDate(); } catch (e) { return null; }
+  }
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.seconds === 'number') return new Date(val.seconds * 1000);
+  if (typeof val === 'string' || typeof val === 'number') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+
+const isSameDay = (d1: Date, d2: Date) => {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
+
+const formatDayLabel = (date: Date) => {
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+
+  if (isSameDay(date, today)) {
+    return 'Today';
+  } else if (isSameDay(date, yesterday)) {
+    return 'Yesterday';
+  } else if (isSameDay(date, tomorrow)) {
+    return 'Tomorrow';
+  } else {
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  }
+};
+
+const formatFullDayLabel = (date: Date) => {
+  const today = new Date();
+  const isToday = isSameDay(date, today);
+  const formatted = date.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+  return isToday ? `Today • ${formatted}` : formatted;
+};
+
+// Safe Animated Counter that preserves decimals and negative values
 const AnimatedCounter = ({ valueStr, color }: { valueStr: string, color?: string }) => {
-  const [displayValue, setDisplayValue] = useState(valueStr.includes('$') ? '$0' : '0');
+  const [displayValue, setDisplayValue] = useState(valueStr);
 
   useEffect(() => {
-    const target = parseInt(valueStr.replace(/[^0-9]/g, ''), 10);
-    if (isNaN(target)) {
+    const isNegative = valueStr.includes('-');
+    const cleanStr = valueStr.replace(/,/g, '').replace(/[^0-9.]/g, '');
+    const num = parseFloat(cleanStr);
+
+    if (isNaN(num)) {
       setDisplayValue(valueStr);
       return;
     }
 
-    const duration = 1200; // 1.2 seconds
+    const target = isNegative ? -num : num;
+    const hasDecimals = cleanStr.includes('.');
+    const decimalPlaces = hasDecimals ? Math.min(2, cleanStr.split('.')[1]?.length || 0) : 0;
+
+    const duration = 900;
     const startTime = Date.now();
+    let animFrame: number;
 
     const updateCounter = () => {
       const now = Date.now();
       const progress = Math.min(1, (now - startTime) / duration);
-
       const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      const current = Math.round(target * easeProgress);
+      const current = target * easeProgress;
 
-      const prefix = valueStr.includes('₹') ? '₹' : valueStr.includes('$') ? '$' : '';
-      setDisplayValue(`${prefix}${current.toLocaleString()}`);
+      const prefix = valueStr.includes('₹') ? (current < 0 ? '-₹' : '₹') : '';
+      const formatted = Math.abs(current).toLocaleString(undefined, {
+        minimumFractionDigits: decimalPlaces > 0 ? decimalPlaces : 0,
+        maximumFractionDigits: 2,
+      });
+
+      setDisplayValue(`${prefix}${formatted}`);
 
       if (progress < 1) {
-        requestAnimationFrame(updateCounter);
+        animFrame = requestAnimationFrame(updateCounter);
+      } else {
+        setDisplayValue(valueStr);
       }
     };
 
-    requestAnimationFrame(updateCounter);
+    animFrame = requestAnimationFrame(updateCounter);
+    return () => {
+      if (animFrame) cancelAnimationFrame(animFrame);
+    };
   }, [valueStr]);
 
-  return <Text style={[styles.cardValue, color ? { color } : null]}>{displayValue}</Text>;
+  return <Text style={[styles.cardValue, color ? { color } : null]} numberOfLines={1} adjustsFontSizeToFit>{displayValue}</Text>;
 };
 
 export default function SalesReportScreen() {
@@ -76,6 +147,7 @@ export default function SalesReportScreen() {
   const [expenses, setExpenses] = useState<any[]>([]);
   const [stockItems, setStockItems] = useState<any[]>([]);
   const [reduceStockList, setReduceStockList] = useState<any[]>([]);
+  const [resolvedShopId, setResolvedShopId] = useState<string | null>(null);
 
   const [selectedTimeRange, setSelectedTimeRange] = useState(TIME_RANGES[0]);
   const [metrics, setMetrics] = useState({
@@ -86,89 +158,116 @@ export default function SalesReportScreen() {
     totalExpense: '₹0',
     totalProfit: '₹0'
   });
+  const [deductExpenses, setDeductExpenses] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [fromDate, setFromDate] = useState<Date | null>(null);
   const [toDate, setToDate] = useState<Date | null>(null);
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
+  const [selectedDay, setSelectedDay] = useState(new Date());
+  const [showDayPicker, setShowDayPicker] = useState(false);
 
   // Animation values for metrics refresh
   const opacity = useSharedValue(1);
   const scale = useSharedValue(1);
 
+  // Initial shop resolution
   useEffect(() => {
-    let unsubSales: any;
-    let unsubExpenses: any;
-    let unsubPurchase: any;
-    let unsubReduce: any;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Fetch Sales
-        const salesRef = collection(db, 'shops', user.uid, 'sales');
-        unsubSales = onSnapshot(salesRef, (snapshot) => {
-          const data = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setSales(data);
-        });
+        let shopId = user.uid;
 
-        // Fetch Expenses
-        const expRef = collection(db, 'shops', user.uid, 'shop_expense');
-        unsubExpenses = onSnapshot(expRef, (snapshot) => {
-          const data = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setExpenses(data);
-        });
+        try {
+          const salesmanDoc = await getDoc(doc(db, 'salesmen', user.uid));
+          if (salesmanDoc.exists() && salesmanDoc.data().shopId) {
+            shopId = salesmanDoc.data().shopId;
+          }
+        } catch (err) {
+          // ignore error
+        }
 
-        // Fetch Purchase Stock for profit calculation
-        const billsRef = collection(db, 'shops', user.uid, 'purchase_stock');
-        unsubPurchase = onSnapshot(billsRef, (snapshot) => {
-          let flattenedItems: any[] = [];
-          snapshot.docs.forEach(doc => {
-            const billData = doc.data();
-            if (billData.items && Array.isArray(billData.items)) {
-              billData.items.forEach((item: any) => {
-                flattenedItems.push({
-                  name: item.name || 'Unknown',
-                  purchaseQty: item.qty || 0,
-                  purchasePrice: item.price || 0,
-                });
-              });
-            }
-          });
-          setStockItems(flattenedItems);
-        });
+        const storedShopId = await SafeStorage.getItem('selectedShopId');
+        if (storedShopId && storedShopId !== 'all') {
+          shopId = storedShopId;
+        }
 
-        // Fetch Reduce Stock for profit calculation
-        const reduceRef = collection(db, 'shops', user.uid, 'reduce_stock');
-        unsubReduce = onSnapshot(reduceRef, (snapshot) => {
-          const data = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setReduceStockList(data);
-        });
-      } else {
-        setSales([]);
-        setExpenses([]);
-        setStockItems([]);
-        setReduceStockList([]);
+        setResolvedShopId(shopId);
       }
     });
 
-    return () => {
-      unsubscribeAuth();
-      if (unsubSales) unsubSales();
-      if (unsubExpenses) unsubExpenses();
-      if (unsubPurchase) unsubPurchase();
-      if (unsubReduce) unsubReduce();
-    };
+    return () => unsubscribeAuth();
   }, []);
+
+  // Listen to Firestore for current resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setSales([]);
+      setExpenses([]);
+      setStockItems([]);
+      setReduceStockList([]);
+      return;
+    }
+
+    const shopId = resolvedShopId;
+
+    // Fetch Sales
+    const salesRef = collection(db, 'shops', shopId, 'sales');
+    const unsubSales = onSnapshot(salesRef, (snapshot) => {
+      const data = snapshot.docs.map(docSnap => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      }));
+      setSales(data);
+    });
+
+    // Fetch Expenses
+    const expRef = collection(db, 'shops', shopId, 'shop_expense');
+    const unsubExpenses = onSnapshot(expRef, (snapshot) => {
+      const data = snapshot.docs.map(docSnap => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      }));
+      setExpenses(data);
+    });
+
+    // Fetch Purchase Stock for profit calculation
+    const billsRef = collection(db, 'shops', shopId, 'purchase_stock');
+    const unsubPurchase = onSnapshot(billsRef, (snapshot) => {
+      let flattenedItems: any[] = [];
+      snapshot.docs.forEach(docSnap => {
+        const billData = docSnap.data();
+        if (billData.items && Array.isArray(billData.items)) {
+          billData.items.forEach((item: any) => {
+            flattenedItems.push({
+              name: item.name || 'Unknown',
+              purchaseQty: parseFloat(item.qty ?? item.purchaseQty ?? 0) || 0,
+              purchasePrice: parseFloat(item.price ?? item.purchasePrice ?? 0) || 0,
+              isReturn: item.isReturn || false,
+            });
+          });
+        }
+      });
+      setStockItems(flattenedItems);
+    });
+
+    // Fetch Reduce Stock for profit calculation
+    const reduceRef = collection(db, 'shops', shopId, 'reduce_stock');
+    const unsubReduce = onSnapshot(reduceRef, (snapshot) => {
+      const data = snapshot.docs.map(docSnap => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      }));
+      setReduceStockList(data);
+    });
+
+    return () => {
+      unsubSales();
+      unsubExpenses();
+      unsubPurchase();
+      unsubReduce();
+    };
+  }, [resolvedShopId]);
 
   useEffect(() => {
     const now = new Date();
@@ -178,8 +277,8 @@ export default function SalesReportScreen() {
 
     if (selectedTimeRange.id !== 'lifetime') {
       const isMatch = (dateObj: any) => {
-        if (!dateObj?.toDate) return false;
-        const date = dateObj.toDate();
+        const date = parseSafeDate(dateObj);
+        if (!date) return false;
 
         if (selectedTimeRange.id === 'custom') {
           let match = true;
@@ -197,53 +296,77 @@ export default function SalesReportScreen() {
         }
 
         if (selectedTimeRange.id === 'today') {
-          return date.toDateString() === now.toDateString();
+          return isSameDay(date, selectedDay);
         }
+
         if (selectedTimeRange.id === 'this_week') {
-          const diff = now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1);
-          const firstDay = new Date(now.setDate(diff));
-          firstDay.setHours(0, 0, 0, 0);
-          return date >= firstDay;
+          const startOfWeek = new Date(now.getTime());
+          const day = startOfWeek.getDay();
+          const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+          startOfWeek.setDate(diff);
+          startOfWeek.setHours(0, 0, 0, 0);
+          return date >= startOfWeek;
         }
+
         if (selectedTimeRange.id === 'this_month') {
           return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
         }
+
         if (selectedTimeRange.id === 'current_year') {
           return date.getFullYear() === now.getFullYear();
         }
+
         return true;
       };
 
       filteredSales = sales.filter(s => isMatch(s.createdAt));
-      filteredExpenses = expenses.filter(e => isMatch(e.date));
-      filteredReduce = reduceStockList.filter(r => isMatch(r.date));
+      filteredExpenses = expenses.filter(e => isMatch(e.date || e.createdAt));
+      filteredReduce = reduceStockList.filter(r => isMatch(r.date || r.createdAt));
     }
 
-    const total = filteredSales.reduce((sum, s) => sum + (s.amount || 0), 0);
+    const total = filteredSales.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
     const count = filteredSales.length;
-    const cashTotal = filteredSales.reduce((sum, s) => sum + (s.paymentType === 'Cash' || !s.paymentType ? (s.amount || 0) : 0), 0);
-    const onlineTotal = filteredSales.reduce((sum, s) => sum + (s.paymentType === 'Online' ? (s.amount || 0) : 0), 0);
-    const expenseTotal = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const cashTotal = filteredSales.reduce((sum, s) => sum + (s.paymentType === 'Cash' || !s.paymentType ? (parseFloat(s.amount) || 0) : 0), 0);
+    const onlineTotal = filteredSales.reduce((sum, s) => sum + (s.paymentType === 'Online' ? (parseFloat(s.amount) || 0) : 0), 0);
+    const expenseTotal = filteredExpenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
 
     // Profit Calculation
-    const itemStats: Record<string, { totalBuyValue: number, totalBuyQty: number }> = {};
+    const itemStats: Record<string, { totalBuyValue: number; totalBuyQty: number; avgBuyPrice: number }> = {};
     stockItems.forEach(item => {
-      const name = item.name?.trim() || '';
-      if (!name) return;
-      if (!itemStats[name]) itemStats[name] = { totalBuyValue: 0, totalBuyQty: 0 };
-      itemStats[name].totalBuyQty += item.purchaseQty;
-      itemStats[name].totalBuyValue += item.purchaseQty * item.purchasePrice;
+      const rawName = (item.name || '').trim();
+      if (!rawName) return;
+      const key = rawName.toLowerCase();
+      if (!itemStats[key]) {
+        itemStats[key] = { totalBuyValue: 0, totalBuyQty: 0, avgBuyPrice: 0 };
+      }
+      const qty = parseFloat(item.purchaseQty) || 0;
+      const price = parseFloat(item.purchasePrice) || 0;
+      itemStats[key].totalBuyQty += qty;
+      itemStats[key].totalBuyValue += qty * price;
+    });
+
+    Object.keys(itemStats).forEach(key => {
+      const stat = itemStats[key];
+      stat.avgBuyPrice = stat.totalBuyQty > 0 ? stat.totalBuyValue / stat.totalBuyQty : 0;
     });
 
     let totalProfitAmount = 0;
     filteredReduce.forEach(sell => {
-      const name = sell.itemName?.trim() || '';
-      const stats = itemStats[name];
-      const avgBuyPrice = stats && stats.totalBuyQty > 0 ? stats.totalBuyValue / stats.totalBuyQty : 0;
-      const totalBuyValue = (sell.qty || 0) * avgBuyPrice;
-      const totalProfit = (sell.totalAmount || 0) - totalBuyValue;
-      totalProfitAmount += totalProfit;
+      const rawName = (sell.itemName || sell.name || '').trim();
+      const key = rawName.toLowerCase();
+      const stats = itemStats[key];
+      const avgBuyPrice = stats && stats.totalBuyQty > 0 ? stats.avgBuyPrice : 0;
+
+      const qty = parseFloat(sell.qty ?? sell.quantity ?? 0) || 0;
+      const sellTotal = parseFloat(sell.totalAmount ?? sell.amount ?? (qty * (parseFloat(sell.price) || 0))) || 0;
+      const totalBuyCost = qty * avgBuyPrice;
+      const profit = sellTotal - totalBuyCost;
+
+      totalProfitAmount += profit;
     });
+
+    const finalProfitNumber = deductExpenses ? (totalProfitAmount - expenseTotal) : totalProfitAmount;
+    const formattedProfit = `₹${finalProfitNumber.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
     setMetrics({
       totalSales: `₹${total.toLocaleString()}`,
@@ -251,15 +374,44 @@ export default function SalesReportScreen() {
       cashTotal: `₹${cashTotal.toLocaleString()}`,
       onlineTotal: `₹${onlineTotal.toLocaleString()}`,
       totalExpense: `₹${expenseTotal.toLocaleString()}`,
-      totalProfit: `₹${totalProfitAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      totalProfit: formattedProfit
     });
 
     setRefreshKey(prev => prev + 1);
-  }, [sales, expenses, stockItems, reduceStockList, selectedTimeRange, fromDate, toDate]);
+  }, [sales, expenses, stockItems, reduceStockList, selectedTimeRange, fromDate, toDate, deductExpenses, selectedDay]);
 
   const handleSelectTimeRange = (range: typeof TIME_RANGES[0]) => {
     setSelectedTimeRange(range);
+    if (range.id === 'today') {
+      setSelectedDay(new Date());
+    }
+    triggerAnimation();
+  };
 
+  const handlePrevDay = () => {
+    setSelectedDay(prev => {
+      const next = new Date(prev.getTime());
+      next.setDate(next.getDate() - 1);
+      return next;
+    });
+    triggerAnimation();
+  };
+
+  const handleNextDay = () => {
+    setSelectedDay(prev => {
+      const next = new Date(prev.getTime());
+      next.setDate(next.getDate() + 1);
+      return next;
+    });
+    triggerAnimation();
+  };
+
+  const handleJumpToToday = () => {
+    setSelectedDay(new Date());
+    triggerAnimation();
+  };
+
+  const triggerAnimation = () => {
     opacity.value = withTiming(0, { duration: 150 });
     scale.value = withTiming(0.95, { duration: 150 });
 
@@ -316,6 +468,15 @@ export default function SalesReportScreen() {
           </TouchableOpacity>
         </Animated.View>
 
+        {/* Shop Selector */}
+        <Animated.View entering={FadeIn.delay(100).duration(600)} style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <ShopSelectorBar
+            compact
+            selectedShopId={resolvedShopId}
+            onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+          />
+        </Animated.View>
+
         {/* Time Range Selector */}
         <Animated.View entering={FadeIn.delay(200).duration(600)} style={styles.timeRangeContainer}>
           <ScrollView
@@ -323,26 +484,108 @@ export default function SalesReportScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.timeRangeScroll}
           >
-            {TIME_RANGES.map((range) => (
-              <TouchableOpacity
-                key={range.id}
-                style={[
-                  styles.timeRangePill,
-                  selectedTimeRange.id === range.id && styles.timeRangePillSelected
-                ]}
-                onPress={() => handleSelectTimeRange(range)}
-                activeOpacity={0.7}
-              >
-                <Text style={[
-                  styles.timeRangeText,
-                  selectedTimeRange.id === range.id && styles.timeRangeTextSelected
-                ]}>
-                  {range.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {TIME_RANGES.map((range) => {
+              const isSelected = selectedTimeRange.id === range.id;
+              const isToday = range.id === 'today';
+
+              if (isToday && isSelected) {
+                return (
+                  <View key={range.id} style={styles.todayPillActiveGroup}>
+                    <TouchableOpacity
+                      style={styles.pillArrowBtn}
+                      onPress={handlePrevDay}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+                    >
+                      <Feather name="chevron-left" size={16} color={THEME.accent} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.pillCenterBtn}
+                      onPress={() => setShowDayPicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.timeRangeTextSelected}>
+                        {formatDayLabel(selectedDay)}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.pillArrowBtn}
+                      onPress={handleNextDay}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                    >
+                      <Feather name="chevron-right" size={16} color={THEME.accent} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              }
+
+              return (
+                <TouchableOpacity
+                  key={range.id}
+                  style={[
+                    styles.timeRangePill,
+                    isSelected && styles.timeRangePillSelected
+                  ]}
+                  onPress={() => handleSelectTimeRange(range)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.timeRangeText,
+                    isSelected && styles.timeRangeTextSelected
+                  ]}>
+                    {range.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </Animated.View>
+
+        {/* Day Navigator Sub-bar (when Today / Date-wise is active) */}
+        {selectedTimeRange.id === 'today' && (
+          <Animated.View entering={FadeInDown.duration(400)} style={styles.daySubBar}>
+            <TouchableOpacity
+              style={styles.dayArrowBtn}
+              onPress={handlePrevDay}
+              activeOpacity={0.7}
+            >
+              <Feather name="chevron-left" size={16} color={THEME.accent} />
+              <Text style={styles.dayArrowText}>Prev</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dayDateBadge}
+              onPress={() => setShowDayPicker(true)}
+              activeOpacity={0.8}
+            >
+              <Feather name="calendar" size={14} color={THEME.accent} style={{ marginRight: 6 }} />
+              <Text style={styles.dayDateBadgeText}>{formatFullDayLabel(selectedDay)}</Text>
+              <Feather name="chevron-down" size={13} color={THEME.textSub} style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dayArrowBtn}
+              onPress={handleNextDay}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dayArrowText}>Next</Text>
+              <Feather name="chevron-right" size={16} color={THEME.accent} />
+            </TouchableOpacity>
+
+            {!isSameDay(selectedDay, new Date()) && (
+              <TouchableOpacity
+                style={styles.jumpTodayBtn}
+                onPress={handleJumpToToday}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.jumpTodayText}>Today</Text>
+              </TouchableOpacity>
+            )}
+          </Animated.View>
+        )}
 
         {/* Custom Date Selector */}
         {selectedTimeRange.id === 'custom' && (
@@ -373,6 +616,18 @@ export default function SalesReportScreen() {
 
         {/* Metrics Grid */}
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 20, marginBottom: 12 }}>
+            <Text style={{ color: THEME.textSub, marginRight: 8, fontSize: 13, fontWeight: '500' }}>
+              {deductExpenses ? 'Net Profit (After Exp)' : 'Gross Profit (Pre Exp)'}
+            </Text>
+            <Switch
+              value={deductExpenses}
+              onValueChange={setDeductExpenses}
+              trackColor={{ false: THEME.border, true: THEME.accent }}
+              thumbColor={THEME.bg}
+            />
+          </View>
+
           <View style={styles.gridContainer}>
             {renderMetricCard('Total Balance', metrics.totalSales, 'trending-up', 0)}
             {renderMetricCard('Total Profit', metrics.totalProfit, 'pie-chart', 1, THEME.success)}
@@ -413,6 +668,22 @@ export default function SalesReportScreen() {
           />
         )}
 
+        {showDayPicker && (
+          <DateTimePicker
+            value={selectedDay}
+            mode="date"
+            display="default"
+            onValueChange={(event, date) => {
+              setShowDayPicker(Platform.OS === 'ios');
+              if (date) {
+                setSelectedDay(date);
+                triggerAnimation();
+              }
+            }}
+            onDismiss={() => setShowDayPicker(false)}
+          />
+        )}
+
       </View>
     </SafeAreaView>
   );
@@ -422,7 +693,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: THEME.bg,
-
   },
   container: {
     flex: 1,
@@ -448,7 +718,7 @@ const styles = StyleSheet.create({
   },
   timeRangeContainer: {
     marginBottom: 32,
-    marginHorizontal: -24, // Bleed to edges
+    marginHorizontal: -24,
   },
   timeRangeScroll: {
     paddingHorizontal: 24,
@@ -565,5 +835,77 @@ const styles = StyleSheet.create({
     color: THEME.textSub,
     fontSize: 13,
     fontWeight: '500',
+  },
+  todayPillActiveGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(212, 175, 55, 0.15)',
+    borderWidth: 1,
+    borderColor: THEME.accent,
+    borderRadius: 20,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 10,
+  },
+  pillArrowBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pillCenterBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+  },
+  daySubBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: THEME.cardBg,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 20,
+    marginTop: -8,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  dayArrowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(212, 175, 55, 0.12)',
+  },
+  dayArrowText: {
+    color: THEME.accent,
+    fontSize: 12,
+    fontWeight: '600',
+    marginHorizontal: 3,
+  },
+  dayDateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    flexShrink: 1,
+  },
+  dayDateBadgeText: {
+    color: THEME.textMain,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  jumpTodayBtn: {
+    backgroundColor: THEME.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 4,
+  },
+  jumpTodayText: {
+    color: THEME.bg,
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

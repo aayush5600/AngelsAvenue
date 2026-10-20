@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, { FadeInRight, FadeInDown } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -15,14 +16,12 @@ const THEME = {
   success: '#32d74b'
 };
 
-
-
-
 const MENU_ITEMS = [
   { id: '1', title: 'Sales Report', icon: 'bar-chart-2', subtitle: 'View detailed analytics', route: '/admin-sales-report' },
   { id: '5', title: 'Compare Shops', icon: 'pie-chart', subtitle: 'Analyze branch performance side-by-side', route: '/shop-compare' },
   { id: '3', title: 'View Stock', icon: 'box', subtitle: 'Check inventory levels', route: '/admin-stock' },
   { id: '4', title: 'Person', icon: 'users', subtitle: 'Manage salesmen and admins', route: '/person' },
+  { id: '6', title: 'Daily Notes', icon: 'file-text', subtitle: 'Date-wise rich notes, tables & logs', route: '/notes' },
 ];
 
 export default function HomeScreen() {
@@ -57,8 +56,13 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </Animated.View>
 
+        {/* Shop Selector Button */}
+        <Animated.View entering={FadeInDown.delay(100).duration(800).springify().damping(12)}>
+          <ShopSelectorBar />
+        </Animated.View>
+
         {/* Action List (One Cell Horizontally) */}
-        <View style={styles.listContainer}>
+        <ScrollView style={styles.listContainer} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
           {MENU_ITEMS.map((item, index) => (
             <Animated.View
               key={item.id}
@@ -82,7 +86,7 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </Animated.View>
           ))}
-        </View>
+        </ScrollView>
 
       </View>
     </SafeAreaView>
@@ -93,7 +97,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: THEME.bg,
-
   },
   container: {
     flex: 1,
@@ -105,7 +108,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: 20,
-    paddingBottom: 40,
+    paddingBottom: 24,
   },
   greeting: {
     color: THEME.textMain,
@@ -149,7 +152,7 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     backgroundColor: THEME.cardBg,
-        borderWidth: 2,
+    borderWidth: 2,
     borderColor: THEME.accent,
     justifyContent: 'center',
     alignItems: 'center',
@@ -160,12 +163,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   listContainer: {
-    gap: 16,
+    flex: 1,
   },
   card: {
     width: '100%',
     backgroundColor: THEME.cardBg,
-        borderRadius: 24,
+    borderRadius: 24,
     padding: 20,
     flexDirection: 'row',
     alignItems: 'center',
@@ -177,6 +180,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 12,
     elevation: 8,
+    marginBottom: 16,
   },
   cardContent: {
     flexDirection: 'row',

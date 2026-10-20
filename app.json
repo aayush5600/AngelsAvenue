@@ -8,7 +8,8 @@
     "scheme": "angelsavenueapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/Angel's_Avenue_Logo.png"
+      "icon": "./assets/images/Angel's_Avenue_Logo.png",
+      "bundleIdentifier": "com.angelsavenue.app"
     },
     "android": {
       "package": "com.angelsavenue.app",

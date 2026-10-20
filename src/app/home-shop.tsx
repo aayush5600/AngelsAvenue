@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, { FadeInRight, FadeInDown } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -15,20 +16,20 @@ const THEME = {
   success: '#32d74b'
 };
 
-
-
-
 const MENU_ITEMS = [
-  { id: '1', title: 'Sales Entry', icon: 'edit-3', subtitle: 'Record new sales', route: '/sales-entry' },
-  { id: '2', title: 'Sales Report', icon: 'bar-chart-2', subtitle: 'View shop performance', route: '/sales-report' },
-  { id: '3', title: 'My Stock', icon: 'box', subtitle: 'Check inventory levels', route: '/stock' },
-  { id: '4', title: 'Add Stock', icon: 'plus-square', subtitle: 'Add new items to stock', route: '/add-stock' },
+  { id: '1', title: 'Sales Entry', icon: 'edit-3', subtitle: 'Record new retail sales', route: '/sales-entry' },
+  { id: '2', title: 'Purchase Stock', icon: 'file-text', subtitle: 'Manage supplier bills & stock', route: '/add-stock' },
+  { id: '3', title: 'Sales Report', icon: 'bar-chart-2', subtitle: 'View shop performance', route: '/sales-report' },
+  { id: '4', title: 'Reduce Stock', icon: 'minus-square', subtitle: 'Deduct damaged or sold items', route: '/reduce-stock' },
+  { id: '5', title: 'Stock', icon: 'box', subtitle: 'Track purchase & remaining stock', route: '/stock' },
   { id: '6', title: 'Shop Expense', icon: 'dollar-sign', subtitle: 'Manage daily expenses', route: '/shop-expense' },
+  { id: '7', title: 'Daily Notes', icon: 'file-text', subtitle: 'Date-wise rich notes, tables & logs', route: '/notes' },
 ];
 
 export default function HomeShopScreen() {
   const router = useRouter();
-  const { email } = useLocalSearchParams();
+  const params = useLocalSearchParams();
+  const email = (params.email as string) || 'Shop';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -56,6 +57,11 @@ export default function HomeShopScreen() {
               </Text>
             </View>
           </TouchableOpacity>
+        </Animated.View>
+
+        {/* Shop Selector Button */}
+        <Animated.View entering={FadeInDown.delay(100).duration(800).springify().damping(12)}>
+          <ShopSelectorBar />
         </Animated.View>
 
         {/* Action List (One Cell Horizontally) */}
@@ -94,7 +100,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: THEME.bg,
-
   },
   container: {
     flex: 1,
@@ -106,7 +111,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: 20,
-    paddingBottom: 30,
+    paddingBottom: 24,
   },
   greeting: {
     color: THEME.textMain,
@@ -168,8 +173,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: THEME.cardBg,
+    padding: 16,
     borderRadius: 20,
-    padding: 20,
     marginBottom: 16,
     borderWidth: 1,
     borderColor: THEME.border,
@@ -182,7 +187,7 @@ const styles = StyleSheet.create({
   iconContainer: {
     width: 48,
     height: 48,
-    borderRadius: 16,
+    borderRadius: 24,
     backgroundColor: 'rgba(212, 175, 55, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -190,16 +195,15 @@ const styles = StyleSheet.create({
   },
   textContainer: {
     flex: 1,
-    paddingRight: 16,
   },
   cardTitle: {
     color: THEME.textMain,
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
     marginBottom: 4,
   },
   cardSubtitle: {
     color: THEME.textSub,
-    fontSize: 14,
+    fontSize: 13,
   },
 });

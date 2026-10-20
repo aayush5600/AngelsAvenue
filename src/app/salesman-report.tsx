@@ -8,6 +8,8 @@ import { db, auth } from '../firebaseConfig';
 import { collection, onSnapshot, getDoc, doc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -32,35 +34,90 @@ const TIME_RANGES = [
   { id: 'custom', label: 'Custom' },
 ];
 
+const isSameDay = (d1: Date, d2: Date) => {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
+
+const formatDayLabel = (date: Date) => {
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+
+  if (isSameDay(date, today)) {
+    return 'Today';
+  } else if (isSameDay(date, yesterday)) {
+    return 'Yesterday';
+  } else if (isSameDay(date, tomorrow)) {
+    return 'Tomorrow';
+  } else {
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  }
+};
+
+const formatFullDayLabel = (date: Date) => {
+  const today = new Date();
+  const isToday = isSameDay(date, today);
+  const formatted = date.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+  return isToday ? `Today • ${formatted}` : formatted;
+};
+
 const AnimatedCounter = ({ valueStr }: { valueStr: string }) => {
-  const [displayValue, setDisplayValue] = useState(valueStr.includes('$') ? '$0' : '0');
+  const [displayValue, setDisplayValue] = useState(valueStr);
 
   useEffect(() => {
-    const target = parseInt(valueStr.replace(/[^0-9]/g, ''), 10);
-    if (isNaN(target)) {
+    const isNegative = valueStr.includes('-');
+    const cleanStr = valueStr.replace(/,/g, '').replace(/[^0-9.]/g, '');
+    const num = parseFloat(cleanStr);
+
+    if (isNaN(num)) {
       setDisplayValue(valueStr);
       return;
     }
 
-    const duration = 1200; // 1.2 seconds
+    const target = isNegative ? -num : num;
+    const hasDecimals = cleanStr.includes('.');
+    const decimalPlaces = hasDecimals ? Math.min(2, cleanStr.split('.')[1]?.length || 0) : 0;
+
+    const duration = 900;
     const startTime = Date.now();
+    let animFrame: number;
 
     const updateCounter = () => {
       const now = Date.now();
       const progress = Math.min(1, (now - startTime) / duration);
-
       const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      const current = Math.round(target * easeProgress);
+      const current = target * easeProgress;
 
-      const prefix = valueStr.includes('₹') ? '₹' : valueStr.includes('$') ? '$' : '';
-      setDisplayValue(`${prefix}${current.toLocaleString()}`);
+      const prefix = valueStr.includes('₹') ? (current < 0 ? '-₹' : '₹') : '';
+      const formatted = Math.abs(current).toLocaleString(undefined, {
+        minimumFractionDigits: decimalPlaces > 0 ? decimalPlaces : 0,
+        maximumFractionDigits: 2,
+      });
+
+      setDisplayValue(`${prefix}${formatted}`);
 
       if (progress < 1) {
-        requestAnimationFrame(updateCounter);
+        animFrame = requestAnimationFrame(updateCounter);
+      } else {
+        setDisplayValue(valueStr);
       }
     };
 
-    requestAnimationFrame(updateCounter);
+    animFrame = requestAnimationFrame(updateCounter);
+    return () => {
+      if (animFrame) cancelAnimationFrame(animFrame);
+    };
   }, [valueStr]);
 
   return <Text style={styles.cardValue}>{displayValue}</Text>;
@@ -83,50 +140,57 @@ export default function SalesmanReportScreen() {
   const [toDate, setToDate] = useState<Date | null>(null);
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
+  const [selectedDay, setSelectedDay] = useState(new Date());
+  const [showDayPicker, setShowDayPicker] = useState(false);
+
+  const [resolvedShopId, setResolvedShopId] = useState<string | null>(null);
 
   // Animation values for metrics refresh
   const opacity = useSharedValue(1);
   const scale = useSharedValue(1);
 
+  // Resolve initial shop
   useEffect(() => {
-    let unsubSales: any;
-
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
           const docSnap = await getDoc(doc(db, 'salesmen', user.uid));
-          if (!docSnap.exists()) return;
-          const uData = docSnap.data();
-          const shopId = uData.shopId;
+          let shopId = docSnap.exists() ? docSnap.data().shopId : user.uid;
 
-          if (!shopId) return;
+          const storedShopId = await SafeStorage.getItem('selectedShopId');
+          if (storedShopId && storedShopId !== 'all') {
+            shopId = storedShopId;
+          }
 
-          // Fetch Sales
-          const salesRef = collection(db, 'shops', shopId, 'sales');
-          unsubSales = onSnapshot(salesRef, (snapshot) => {
-            let data = snapshot.docs.map(d => ({
-              id: d.id,
-              ...d.data()
-            }));
-
-            // Filter only the salesman's own sales
-            data = data.filter((s: any) => s.salesmanId === user.uid);
-
-            setSales(data);
-          });
+          setResolvedShopId(shopId);
         } catch (e) {
           console.error("Error fetching salesman report data", e);
         }
-      } else {
-        setSales([]);
       }
     });
 
-    return () => {
-      unsubscribeAuth();
-      if (unsubSales) unsubSales();
-    };
+    return () => unsubscribeAuth();
   }, []);
+
+  // Listen to sales for resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setSales([]);
+      return;
+    }
+
+    const salesRef = collection(db, 'shops', resolvedShopId, 'sales');
+    const unsubSales = onSnapshot(salesRef, (snapshot) => {
+      let data = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+
+      setSales(data);
+    });
+
+    return () => unsubSales();
+  }, [resolvedShopId]);
 
   useEffect(() => {
     const now = new Date();
@@ -152,7 +216,7 @@ export default function SalesmanReportScreen() {
       }
 
       if (selectedTimeRange.id === 'today') {
-        return date.toDateString() === now.toDateString();
+        return isSameDay(date, selectedDay);
       }
       if (selectedTimeRange.id === 'this_week') {
         const diff = 7;
@@ -177,11 +241,40 @@ export default function SalesmanReportScreen() {
     });
 
     setRefreshKey(prev => prev + 1);
-  }, [sales, selectedTimeRange, fromDate, toDate]);
+  }, [sales, selectedTimeRange, fromDate, toDate, selectedDay]);
 
   const handleSelectTimeRange = (range: typeof TIME_RANGES[0]) => {
     setSelectedTimeRange(range);
+    if (range.id === 'today') {
+      setSelectedDay(new Date());
+    }
+    triggerAnimation();
+  };
 
+  const handlePrevDay = () => {
+    setSelectedDay(prev => {
+      const next = new Date(prev.getTime());
+      next.setDate(next.getDate() - 1);
+      return next;
+    });
+    triggerAnimation();
+  };
+
+  const handleNextDay = () => {
+    setSelectedDay(prev => {
+      const next = new Date(prev.getTime());
+      next.setDate(next.getDate() + 1);
+      return next;
+    });
+    triggerAnimation();
+  };
+
+  const handleJumpToToday = () => {
+    setSelectedDay(new Date());
+    triggerAnimation();
+  };
+
+  const triggerAnimation = () => {
     opacity.value = withTiming(0, { duration: 150 });
     scale.value = withTiming(0.95, { duration: 150 });
 
@@ -232,6 +325,15 @@ export default function SalesmanReportScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Shop Selector */}
+        <View style={{ marginTop: 10 }}>
+          <ShopSelectorBar
+            compact
+            selectedShopId={resolvedShopId}
+            onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+          />
+        </View>
+
         {/* Time Range Selector */}
         <Animated.View entering={FadeInDown.delay(200).duration(600)} style={styles.timeRangeContainer}>
           <ScrollView
@@ -239,25 +341,107 @@ export default function SalesmanReportScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.timeRangeScroll}
           >
-            {TIME_RANGES.map((range) => (
-              <TouchableOpacity
-                key={range.id}
-                style={[
-                  styles.timeRangePill,
-                  selectedTimeRange.id === range.id && styles.timeRangePillSelected
-                ]}
-                onPress={() => handleSelectTimeRange(range)}
-              >
-                <Text style={[
-                  styles.timeRangeText,
-                  selectedTimeRange.id === range.id && styles.timeRangeTextSelected
-                ]}>
-                  {range.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {TIME_RANGES.map((range) => {
+              const isSelected = selectedTimeRange.id === range.id;
+              const isToday = range.id === 'today';
+
+              if (isToday && isSelected) {
+                return (
+                  <View key={range.id} style={styles.todayPillActiveGroup}>
+                    <TouchableOpacity
+                      style={styles.pillArrowBtn}
+                      onPress={handlePrevDay}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+                    >
+                      <Feather name="chevron-left" size={16} color={THEME.accent} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.pillCenterBtn}
+                      onPress={() => setShowDayPicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.timeRangeTextSelected}>
+                        {formatDayLabel(selectedDay)}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.pillArrowBtn}
+                      onPress={handleNextDay}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                    >
+                      <Feather name="chevron-right" size={16} color={THEME.accent} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              }
+
+              return (
+                <TouchableOpacity
+                  key={range.id}
+                  style={[
+                    styles.timeRangePill,
+                    isSelected && styles.timeRangePillSelected
+                  ]}
+                  onPress={() => handleSelectTimeRange(range)}
+                >
+                  <Text style={[
+                    styles.timeRangeText,
+                    isSelected && styles.timeRangeTextSelected
+                  ]}>
+                    {range.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </Animated.View>
+
+        {/* Day Navigator Sub-bar (when Today / Date-wise is active) */}
+        {selectedTimeRange.id === 'today' && (
+          <Animated.View entering={FadeInDown.duration(400)} style={styles.daySubBar}>
+            <TouchableOpacity
+              style={styles.dayArrowBtn}
+              onPress={handlePrevDay}
+              activeOpacity={0.7}
+            >
+              <Feather name="chevron-left" size={16} color={THEME.accent} />
+              <Text style={styles.dayArrowText}>Prev</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dayDateBadge}
+              onPress={() => setShowDayPicker(true)}
+              activeOpacity={0.8}
+            >
+              <Feather name="calendar" size={14} color={THEME.accent} style={{ marginRight: 6 }} />
+              <Text style={styles.dayDateBadgeText}>{formatFullDayLabel(selectedDay)}</Text>
+              <Feather name="chevron-down" size={13} color={THEME.textSub} style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dayArrowBtn}
+              onPress={handleNextDay}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dayArrowText}>Next</Text>
+              <Feather name="chevron-right" size={16} color={THEME.accent} />
+            </TouchableOpacity>
+
+            {!isSameDay(selectedDay, new Date()) && (
+              <TouchableOpacity
+                style={styles.jumpTodayBtn}
+                onPress={handleJumpToToday}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.jumpTodayText}>Today</Text>
+              </TouchableOpacity>
+            )}
+          </Animated.View>
+        )}
 
         {/* Custom Date Selector */}
         {selectedTimeRange.id === 'custom' && (
@@ -323,6 +507,22 @@ export default function SalesmanReportScreen() {
               }
             }}
             onDismiss={() => setShowToPicker(false)}
+          />
+        )}
+
+        {showDayPicker && (
+          <DateTimePicker
+            value={selectedDay}
+            mode="date"
+            display="default"
+            onValueChange={(event, date) => {
+              setShowDayPicker(Platform.OS === 'ios');
+              if (date) {
+                setSelectedDay(date);
+                triggerAnimation();
+              }
+            }}
+            onDismiss={() => setShowDayPicker(false)}
           />
         )}
 
@@ -476,5 +676,77 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     letterSpacing: -0.5,
+  },
+  todayPillActiveGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(212, 175, 55, 0.15)',
+    borderWidth: 1,
+    borderColor: THEME.accent,
+    borderRadius: 20,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 10,
+  },
+  pillArrowBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pillCenterBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+  },
+  daySubBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: THEME.cardBg,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 20,
+    marginTop: -8,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  dayArrowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(212, 175, 55, 0.12)',
+  },
+  dayArrowText: {
+    color: THEME.accent,
+    fontSize: 12,
+    fontWeight: '600',
+    marginHorizontal: 3,
+  },
+  dayDateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    flexShrink: 1,
+  },
+  dayDateBadgeText: {
+    color: THEME.textMain,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  jumpTodayBtn: {
+    backgroundColor: THEME.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 4,
+  },
+  jumpTodayText: {
+    color: THEME.bg,
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

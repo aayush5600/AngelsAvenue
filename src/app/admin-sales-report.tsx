@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, Modal, ScrollView, TextInput, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, Modal, ScrollView, Dimensions, ActivityIndicator, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInDown, FadeInUp, useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import { db, auth } from '../firebaseConfig';
-import { collection, collectionGroup, onSnapshot, query, getDocs } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
+import { db } from '../firebaseConfig';
+import { collection, collectionGroup, onSnapshot } from 'firebase/firestore';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -20,12 +20,9 @@ const THEME = {
   success: '#32d74b'
 };
 
-
 const { width } = Dimensions.get('window');
 const CARD_MARGIN = 16;
 const CARD_WIDTH = (width - 48 - CARD_MARGIN) / 2;
-
-
 
 const TIME_RANGES = [
   { id: 'lifetime', label: 'Lifetime' },
@@ -36,38 +33,109 @@ const TIME_RANGES = [
   { id: 'custom', label: 'Custom' },
 ];
 
-const AnimatedCounter = ({ valueStr }: { valueStr: string }) => {
-  const [displayValue, setDisplayValue] = useState(valueStr.includes('$') ? '$0' : '0');
+// Helper to safely parse dates in any format (Firestore Timestamp, Date, string, numeric timestamp)
+const parseSafeDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (typeof val.toDate === 'function') {
+    try { return val.toDate(); } catch (e) { return null; }
+  }
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.seconds === 'number') return new Date(val.seconds * 1000);
+  if (typeof val === 'string' || typeof val === 'number') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+
+const isSameDay = (d1: Date, d2: Date) => {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
+
+const formatDayLabel = (date: Date) => {
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+
+  if (isSameDay(date, today)) {
+    return 'Today';
+  } else if (isSameDay(date, yesterday)) {
+    return 'Yesterday';
+  } else if (isSameDay(date, tomorrow)) {
+    return 'Tomorrow';
+  } else {
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  }
+};
+
+const formatFullDayLabel = (date: Date) => {
+  const today = new Date();
+  const isToday = isSameDay(date, today);
+  const formatted = date.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+  return isToday ? `Today • ${formatted}` : formatted;
+};
+
+// Safe Animated Counter that preserves decimals and negative values
+const AnimatedCounter = ({ valueStr, color }: { valueStr: string, color?: string }) => {
+  const [displayValue, setDisplayValue] = useState(valueStr);
 
   useEffect(() => {
-    const target = parseInt(valueStr.replace(/[^0-9]/g, ''), 10);
-    if (isNaN(target)) {
+    const isNegative = valueStr.includes('-');
+    const cleanStr = valueStr.replace(/,/g, '').replace(/[^0-9.]/g, '');
+    const num = parseFloat(cleanStr);
+
+    if (isNaN(num)) {
       setDisplayValue(valueStr);
       return;
     }
 
-    const duration = 1200; // 1.2 seconds
+    const target = isNegative ? -num : num;
+    const hasDecimals = cleanStr.includes('.');
+    const decimalPlaces = hasDecimals ? Math.min(2, cleanStr.split('.')[1]?.length || 0) : 0;
+
+    const duration = 900;
     const startTime = Date.now();
+    let animFrame: number;
 
     const updateCounter = () => {
       const now = Date.now();
       const progress = Math.min(1, (now - startTime) / duration);
-
       const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      const current = Math.round(target * easeProgress);
+      const current = target * easeProgress;
 
-      const prefix = valueStr.includes('₹') ? '₹' : valueStr.includes('$') ? '$' : '';
-      setDisplayValue(`${prefix}${current.toLocaleString()}`);
+      const prefix = valueStr.includes('₹') ? (current < 0 ? '-₹' : '₹') : '';
+      const formatted = Math.abs(current).toLocaleString(undefined, {
+        minimumFractionDigits: decimalPlaces > 0 ? decimalPlaces : 0,
+        maximumFractionDigits: 2,
+      });
+
+      setDisplayValue(`${prefix}${formatted}`);
 
       if (progress < 1) {
-        requestAnimationFrame(updateCounter);
+        animFrame = requestAnimationFrame(updateCounter);
+      } else {
+        setDisplayValue(valueStr);
       }
     };
 
-    requestAnimationFrame(updateCounter);
+    animFrame = requestAnimationFrame(updateCounter);
+    return () => {
+      if (animFrame) cancelAnimationFrame(animFrame);
+    };
   }, [valueStr]);
 
-  return <Text style={styles.cardValue} numberOfLines={1} adjustsFontSizeToFit>{displayValue}</Text>;
+  return <Text style={[styles.cardValue, color ? { color } : null]} numberOfLines={1} adjustsFontSizeToFit>{displayValue}</Text>;
 };
 
 export default function AdminSalesReportScreen() {
@@ -91,12 +159,15 @@ export default function AdminSalesReportScreen() {
     totalExpense: '₹0',
     totalProfit: '₹0'
   });
+  const [deductExpenses, setDeductExpenses] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [fromDate, setFromDate] = useState<Date | null>(null);
   const [toDate, setToDate] = useState<Date | null>(null);
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
+  const [selectedDay, setSelectedDay] = useState(new Date());
+  const [showDayPicker, setShowDayPicker] = useState(false);
 
   const [loading, setLoading] = useState(true);
 
@@ -114,47 +185,69 @@ export default function AdminSalesReportScreen() {
     const loadData = async () => {
       // 1. Fetch Shops
       unsubShops = onSnapshot(collection(db, 'shops'), (snapshot) => {
-        setShops([{ id: 'all', name: 'All Shops' }, ...snapshot.docs.map(d => ({ id: d.id, name: d.data().shopName || d.data().name || 'Unknown' }))]);
+        setShops([
+          { id: 'all', name: 'All Shops' },
+          ...snapshot.docs.map(d => ({
+            id: d.id,
+            name: d.data().shopName || d.data().name || 'Shop ' + d.id.slice(0, 5)
+          }))
+        ]);
       });
 
       // 2. Fetch all sales using collectionGroup
       unsubSales = onSnapshot(collectionGroup(db, 'sales'), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({
-          id: doc.id,
-          shopId: doc.ref.parent.parent?.id, // Gets the shop ID from the path
-          ...doc.data()
-        }));
+        const data = snapshot.docs.map(docSnap => {
+          const d = docSnap.data();
+          const derivedShopId = d.shopId || docSnap.ref.parent.parent?.id || 'unknown';
+          return {
+            id: docSnap.id,
+            ...d,
+            shopId: derivedShopId
+          };
+        });
         setSales(data);
       });
 
       // 3. Fetch all purchase_stock using collectionGroup
       unsubStocks = onSnapshot(collectionGroup(db, 'purchase_stock'), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({
-          id: doc.id,
-          shopId: doc.ref.parent.parent?.id,
-          ...doc.data()
-        }));
+        const data = snapshot.docs.map(docSnap => {
+          const d = docSnap.data();
+          const derivedShopId = d.shopId || docSnap.ref.parent.parent?.id || 'unknown';
+          return {
+            id: docSnap.id,
+            ...d,
+            shopId: derivedShopId
+          };
+        });
         setStocks(data);
       });
 
       // 4. Fetch all expenses using collectionGroup
       unsubExpenses = onSnapshot(collectionGroup(db, 'shop_expense'), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({
-          id: doc.id,
-          shopId: doc.ref.parent.parent?.id,
-          ...doc.data()
-        }));
+        const data = snapshot.docs.map(docSnap => {
+          const d = docSnap.data();
+          const derivedShopId = d.shopId || docSnap.ref.parent.parent?.id || 'unknown';
+          return {
+            id: docSnap.id,
+            ...d,
+            shopId: derivedShopId
+          };
+        });
         setExpenses(data);
         setLoading(false);
       });
 
       // 5. Fetch all reduce_stock using collectionGroup
       unsubReduce = onSnapshot(collectionGroup(db, 'reduce_stock'), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({
-          id: doc.id,
-          shopId: doc.ref.parent.parent?.id,
-          ...doc.data()
-        }));
+        const data = snapshot.docs.map(docSnap => {
+          const d = docSnap.data();
+          const derivedShopId = d.shopId || docSnap.ref.parent.parent?.id || 'unknown';
+          return {
+            id: docSnap.id,
+            ...d,
+            shopId: derivedShopId
+          };
+        });
         setReduceStocks(data);
       });
     };
@@ -179,15 +272,15 @@ export default function AdminSalesReportScreen() {
     let shopFilteredExpenses = selectedShopId === 'all' ? expenses : expenses.filter(s => s.shopId === selectedShopId);
     let shopFilteredReduce = selectedShopId === 'all' ? reduceStocks : reduceStocks.filter(s => s.shopId === selectedShopId);
 
-    // Filter Sales and Expenses by Time
+    // Filter Sales, Expenses, and Reduce by Time
     let timeFilteredSales = shopFilteredSales;
     let timeFilteredExpenses = shopFilteredExpenses;
     let timeFilteredReduce = shopFilteredReduce;
 
     if (selectedTimeRange.id !== 'lifetime') {
       const isMatch = (dateObj: any) => {
-        if (!dateObj?.toDate) return false;
-        const date = dateObj.toDate();
+        const date = parseSafeDate(dateObj);
+        if (!date) return false;
 
         if (selectedTimeRange.id === 'custom') {
           let match = true;
@@ -205,75 +298,106 @@ export default function AdminSalesReportScreen() {
         }
 
         if (selectedTimeRange.id === 'today') {
-          return date.toDateString() === now.toDateString();
+          return isSameDay(date, selectedDay);
         }
+
         if (selectedTimeRange.id === 'this_week') {
-          const diff = now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1);
-          const firstDay = new Date(now.setDate(diff));
-          firstDay.setHours(0, 0, 0, 0);
-          return date >= firstDay;
+          const startOfWeek = new Date(now.getTime());
+          const day = startOfWeek.getDay();
+          const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+          startOfWeek.setDate(diff);
+          startOfWeek.setHours(0, 0, 0, 0);
+          return date >= startOfWeek;
         }
+
         if (selectedTimeRange.id === 'this_month') {
           return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
         }
+
         if (selectedTimeRange.id === 'current_year') {
           return date.getFullYear() === now.getFullYear();
         }
+
         return true;
       };
 
       timeFilteredSales = shopFilteredSales.filter(s => isMatch(s.createdAt));
-      timeFilteredExpenses = shopFilteredExpenses.filter(e => isMatch(e.date));
-      timeFilteredReduce = shopFilteredReduce.filter(r => isMatch(r.date));
+      timeFilteredExpenses = shopFilteredExpenses.filter(e => isMatch(e.date || e.createdAt));
+      timeFilteredReduce = shopFilteredReduce.filter(r => isMatch(r.date || r.createdAt));
     }
 
     // Calculate Sales Metrics
-    const total = timeFilteredSales.reduce((sum, s) => sum + (s.amount || 0), 0);
-    const cashTotal = timeFilteredSales.reduce((sum, s) => sum + (s.paymentType === 'Cash' || !s.paymentType ? (s.amount || 0) : 0), 0);
-    const onlineTotal = timeFilteredSales.reduce((sum, s) => sum + (s.paymentType === 'Online' ? (s.amount || 0) : 0), 0);
+    const total = timeFilteredSales.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+    const cashTotal = timeFilteredSales.reduce((sum, s) => sum + (s.paymentType === 'Cash' || !s.paymentType ? (parseFloat(s.amount) || 0) : 0), 0);
+    const onlineTotal = timeFilteredSales.reduce((sum, s) => sum + (s.paymentType === 'Online' ? (parseFloat(s.amount) || 0) : 0), 0);
 
     // Calculate Expense Metric
-    const expenseTotal = timeFilteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const expenseTotal = timeFilteredExpenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
 
-    // Calculate Stock Metric (always lifetime based on available inventory)
+    // Calculate Stock Metric & Item Stats for Profit
     let stockTotalValue = 0;
-    const itemStats: Record<string, { totalBuyValue: number, totalBuyQty: number }> = {};
+    const itemStats: Record<string, { totalBuyValue: number; totalBuyQty: number; avgBuyPrice: number; name: string }> = {};
 
     shopFilteredStocks.forEach(bill => {
-      const shopId = bill.shopId;
+      const shopId = bill.shopId || '';
       if (bill.items && Array.isArray(bill.items)) {
         bill.items.forEach((item: any) => {
-          const purchaseQty = item.qty || 0;
-          const sellQty = item.sellQty || 0;
-          const price = item.price || 0;
+          const purchaseQty = parseFloat(item.qty ?? item.purchaseQty ?? 0) || 0;
+          const sellQty = parseFloat(item.sellQty ?? 0) || 0;
+          const price = parseFloat(item.price ?? item.purchasePrice ?? 0) || 0;
           const availableQty = purchaseQty - sellQty;
           if (availableQty > 0) {
             stockTotalValue += (availableQty * price);
           }
 
           // Accumulate for profit calculation
-          const name = item.name?.trim() || '';
-          if (name) {
-            const key = `${shopId}_${name}`;
-            if (!itemStats[key]) itemStats[key] = { totalBuyValue: 0, totalBuyQty: 0 };
-            itemStats[key].totalBuyQty += purchaseQty;
-            itemStats[key].totalBuyValue += purchaseQty * price;
+          const rawName = (item.name || '').trim();
+          if (rawName) {
+            const cleanName = rawName.toLowerCase();
+            const shopKey = `${shopId}_${cleanName}`;
+            const fallbackKey = cleanName;
+
+            // Shop-specific index
+            if (!itemStats[shopKey]) itemStats[shopKey] = { totalBuyValue: 0, totalBuyQty: 0, avgBuyPrice: 0, name: rawName };
+            itemStats[shopKey].totalBuyQty += purchaseQty;
+            itemStats[shopKey].totalBuyValue += purchaseQty * price;
+
+            // General item fallback index
+            if (!itemStats[fallbackKey]) itemStats[fallbackKey] = { totalBuyValue: 0, totalBuyQty: 0, avgBuyPrice: 0, name: rawName };
+            itemStats[fallbackKey].totalBuyQty += purchaseQty;
+            itemStats[fallbackKey].totalBuyValue += purchaseQty * price;
           }
         });
       }
     });
 
+    Object.keys(itemStats).forEach(key => {
+      const s = itemStats[key];
+      s.avgBuyPrice = s.totalBuyQty > 0 ? s.totalBuyValue / s.totalBuyQty : 0;
+    });
+
     // Profit Calculation
     let totalProfitAmount = 0;
     timeFilteredReduce.forEach(sell => {
-      const name = sell.itemName?.trim() || '';
-      const key = `${sell.shopId}_${name}`;
-      const stats = itemStats[key];
-      const avgBuyPrice = stats && stats.totalBuyQty > 0 ? stats.totalBuyValue / stats.totalBuyQty : 0;
-      const totalBuyValue = (sell.qty || 0) * avgBuyPrice;
-      const totalProfit = (sell.totalAmount || 0) - totalBuyValue;
-      totalProfitAmount += totalProfit;
+      const rawName = (sell.itemName || sell.name || '').trim();
+      const cleanName = rawName.toLowerCase();
+      const shopId = sell.shopId || '';
+      const shopKey = `${shopId}_${cleanName}`;
+      const fallbackKey = cleanName;
+
+      const stats = itemStats[shopKey] || itemStats[fallbackKey];
+      const avgBuyPrice = stats && stats.totalBuyQty > 0 ? stats.avgBuyPrice : 0;
+
+      const qty = parseFloat(sell.qty ?? sell.quantity ?? 0) || 0;
+      const sellTotal = parseFloat(sell.totalAmount ?? sell.amount ?? (qty * (parseFloat(sell.price) || 0))) || 0;
+      const totalBuyCost = qty * avgBuyPrice;
+      const profit = sellTotal - totalBuyCost;
+
+      totalProfitAmount += profit;
     });
+
+    const finalProfitNumber = deductExpenses ? (totalProfitAmount - expenseTotal) : totalProfitAmount;
+    const formattedProfit = `₹${finalProfitNumber.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
     setMetrics({
       totalSales: `₹${total.toLocaleString()}`,
@@ -281,14 +405,40 @@ export default function AdminSalesReportScreen() {
       onlineTotal: `₹${onlineTotal.toLocaleString()}`,
       stockValue: `₹${stockTotalValue.toLocaleString()}`,
       totalExpense: `₹${expenseTotal.toLocaleString()}`,
-      totalProfit: `₹${totalProfitAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      totalProfit: formattedProfit
     });
 
     setRefreshKey(prev => prev + 1);
-  }, [sales, stocks, expenses, reduceStocks, selectedShopId, selectedTimeRange, fromDate, toDate]);
+  }, [sales, stocks, expenses, reduceStocks, selectedShopId, selectedTimeRange, fromDate, toDate, deductExpenses, selectedDay]);
 
   const handleSelectTimeRange = (range: typeof TIME_RANGES[0]) => {
     setSelectedTimeRange(range);
+    if (range.id === 'today') {
+      setSelectedDay(new Date());
+    }
+    triggerAnimation();
+  };
+
+  const handlePrevDay = () => {
+    setSelectedDay(prev => {
+      const next = new Date(prev.getTime());
+      next.setDate(next.getDate() - 1);
+      return next;
+    });
+    triggerAnimation();
+  };
+
+  const handleNextDay = () => {
+    setSelectedDay(prev => {
+      const next = new Date(prev.getTime());
+      next.setDate(next.getDate() + 1);
+      return next;
+    });
+    triggerAnimation();
+  };
+
+  const handleJumpToToday = () => {
+    setSelectedDay(new Date());
     triggerAnimation();
   };
 
@@ -307,7 +457,7 @@ export default function AdminSalesReportScreen() {
       opacity.value = withTiming(1, { duration: 300 });
       scale.value = withSpring(1, { damping: 12 });
     }, 150);
-  }
+  };
 
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -316,24 +466,27 @@ export default function AdminSalesReportScreen() {
     };
   });
 
-  const renderMetricCard = (title: string, value: string, icon: any, index: number) => (
-    <Animated.View
-      entering={FadeInUp.delay(300 + index * 100).duration(600).springify()}
-      style={styles.cardWrapper}
-    >
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View style={styles.iconContainer}>
-            <Feather name={icon} size={22} color={THEME.accent} />
+  const renderMetricCard = (title: string, value: string, icon: any, index: number) => {
+    const isProfitCard = title === 'Total Profit';
+    return (
+      <Animated.View
+        entering={FadeInUp.delay(300 + index * 100).duration(600).springify()}
+        style={styles.cardWrapper}
+      >
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.iconContainer}>
+              <Feather name={icon} size={22} color={THEME.accent} />
+            </View>
           </View>
+          <Animated.View style={animatedStyle}>
+            <AnimatedCounter key={refreshKey} valueStr={value} color={isProfitCard ? THEME.success : undefined} />
+          </Animated.View>
+          <Text style={styles.cardTitle}>{title}</Text>
         </View>
-        <Animated.View style={animatedStyle}>
-          <AnimatedCounter key={refreshKey} valueStr={value} />
-        </Animated.View>
-        <Text style={styles.cardTitle}>{title}</Text>
-      </View>
-    </Animated.View>
-  );
+      </Animated.View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -349,24 +502,25 @@ export default function AdminSalesReportScreen() {
           >
             <Feather name="arrow-left" size={24} color={THEME.textMain} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Admin Sales Report</Text>
+          <Text style={styles.headerTitle}>Sales Report</Text>
           <TouchableOpacity onPress={() => router.push('/dashboard')} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(212, 175, 55, 0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>
             <Feather name="layout" size={16} color={THEME.accent} style={{ marginRight: 6 }} />
             <Text style={{ color: THEME.accent, fontWeight: '600', fontSize: 14 }}>Dashboard</Text>
           </TouchableOpacity>
         </Animated.View>
 
-        {/* Shop Selector */}
-        <Animated.View entering={FadeInDown.delay(100).duration(600)} style={{ marginBottom: 16 }}>
-          <TouchableOpacity
-            style={styles.shopSelectorBtn}
-            activeOpacity={0.8}
-            onPress={() => setShopDropdownVisible(true)}
-          >
-            <Feather name="home" size={20} color={THEME.accent} />
-            <Text style={styles.shopSelectorText}>{selectedShopName}</Text>
-            <Feather name="chevron-down" size={20} color={THEME.textSub} style={{ marginLeft: 'auto' }} />
-          </TouchableOpacity>
+        {/* Shop Dropdown Selector */}
+        <Animated.View entering={FadeIn.delay(100).duration(600)} style={{ marginBottom: 12 }}>
+          <ShopSelectorBar
+            compact
+            allowAll
+            selectedShopId={selectedShopId}
+            onShopChange={(newShopId, shop) => {
+              setSelectedShopId(newShopId);
+              setSelectedShopName(shop.name);
+              triggerAnimation();
+            }}
+          />
         </Animated.View>
 
         {/* Time Range Selector */}
@@ -376,26 +530,108 @@ export default function AdminSalesReportScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.timeRangeScroll}
           >
-            {TIME_RANGES.map((range) => (
-              <TouchableOpacity
-                key={range.id}
-                style={[
-                  styles.timeRangePill,
-                  selectedTimeRange.id === range.id && styles.timeRangePillSelected
-                ]}
-                onPress={() => handleSelectTimeRange(range)}
-                activeOpacity={0.7}
-              >
-                <Text style={[
-                  styles.timeRangeText,
-                  selectedTimeRange.id === range.id && styles.timeRangeTextSelected
-                ]}>
-                  {range.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {TIME_RANGES.map((range) => {
+              const isSelected = selectedTimeRange.id === range.id;
+              const isToday = range.id === 'today';
+
+              if (isToday && isSelected) {
+                return (
+                  <View key={range.id} style={styles.todayPillActiveGroup}>
+                    <TouchableOpacity
+                      style={styles.pillArrowBtn}
+                      onPress={handlePrevDay}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+                    >
+                      <Feather name="chevron-left" size={16} color={THEME.accent} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.pillCenterBtn}
+                      onPress={() => setShowDayPicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.timeRangeTextSelected}>
+                        {formatDayLabel(selectedDay)}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.pillArrowBtn}
+                      onPress={handleNextDay}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                    >
+                      <Feather name="chevron-right" size={16} color={THEME.accent} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              }
+
+              return (
+                <TouchableOpacity
+                  key={range.id}
+                  style={[
+                    styles.timeRangePill,
+                    isSelected && styles.timeRangePillSelected
+                  ]}
+                  onPress={() => handleSelectTimeRange(range)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.timeRangeText,
+                    isSelected && styles.timeRangeTextSelected
+                  ]}>
+                    {range.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </Animated.View>
+
+        {/* Day Navigator Sub-bar (when Today / Date-wise is active) */}
+        {selectedTimeRange.id === 'today' && (
+          <Animated.View entering={FadeInDown.duration(400)} style={styles.daySubBar}>
+            <TouchableOpacity
+              style={styles.dayArrowBtn}
+              onPress={handlePrevDay}
+              activeOpacity={0.7}
+            >
+              <Feather name="chevron-left" size={16} color={THEME.accent} />
+              <Text style={styles.dayArrowText}>Prev</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dayDateBadge}
+              onPress={() => setShowDayPicker(true)}
+              activeOpacity={0.8}
+            >
+              <Feather name="calendar" size={14} color={THEME.accent} style={{ marginRight: 6 }} />
+              <Text style={styles.dayDateBadgeText}>{formatFullDayLabel(selectedDay)}</Text>
+              <Feather name="chevron-down" size={13} color={THEME.textSub} style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dayArrowBtn}
+              onPress={handleNextDay}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dayArrowText}>Next</Text>
+              <Feather name="chevron-right" size={16} color={THEME.accent} />
+            </TouchableOpacity>
+
+            {!isSameDay(selectedDay, new Date()) && (
+              <TouchableOpacity
+                style={styles.jumpTodayBtn}
+                onPress={handleJumpToToday}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.jumpTodayText}>Today</Text>
+              </TouchableOpacity>
+            )}
+          </Animated.View>
+        )}
 
         {/* Custom Date Selector */}
         {selectedTimeRange.id === 'custom' && (
@@ -432,6 +668,18 @@ export default function AdminSalesReportScreen() {
           </View>
         ) : (
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 20, marginBottom: 12 }}>
+              <Text style={{ color: THEME.textSub, marginRight: 8, fontSize: 13, fontWeight: '500' }}>
+                {deductExpenses ? 'Net Profit (After Exp)' : 'Gross Profit (Pre Exp)'}
+              </Text>
+              <Switch
+                value={deductExpenses}
+                onValueChange={setDeductExpenses}
+                trackColor={{ false: THEME.border, true: THEME.accent }}
+                thumbColor={THEME.bg}
+              />
+            </View>
+
             <View style={styles.gridContainer}>
               {renderMetricCard('Total Sell', metrics.totalSales, 'trending-up', 0)}
               {renderMetricCard('Total Profit', metrics.totalProfit, 'pie-chart', 1)}
@@ -443,43 +691,7 @@ export default function AdminSalesReportScreen() {
           </ScrollView>
         )}
 
-        {/* Shop Selection Modal */}
-        <Modal
-          visible={shopDropdownVisible}
-          transparent={true}
-          animationType="fade"
-          onRequestClose={() => setShopDropdownVisible(false)}
-        >
-          <TouchableOpacity
-            style={styles.dropdownOverlay}
-            activeOpacity={1}
-            onPress={() => setShopDropdownVisible(false)}
-          >
-            <BlurView intensity={40} tint="dark" style={styles.glassContainer}>
-              <View style={styles.dropdownMenu}>
-                <Text style={styles.dropdownTitle}>Filter by Shop</Text>
-                <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 300 }}>
-                  {shops.map((shop, index) => (
-                    <TouchableOpacity
-                      key={shop.id}
-                      style={[
-                        styles.dropdownItem,
-                        index !== shops.length - 1 && styles.dropdownItemBorder
-                      ]}
-                      onPress={() => handleSelectShop(shop.id, shop.name)}
-                    >
-                      <Text style={[
-                        styles.dropdownItemText,
-                        selectedShopId === shop.id && styles.dropdownItemTextSelected
-                      ]}>{shop.name}</Text>
-                      {selectedShopId === shop.id && <Feather name="check" size={20} color={THEME.accent} />}
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            </BlurView>
-          </TouchableOpacity>
-        </Modal>
+
 
         {showFromPicker && (
           <DateTimePicker
@@ -511,6 +723,22 @@ export default function AdminSalesReportScreen() {
           />
         )}
 
+        {showDayPicker && (
+          <DateTimePicker
+            value={selectedDay}
+            mode="date"
+            display="default"
+            onValueChange={(event, date) => {
+              setShowDayPicker(Platform.OS === 'ios');
+              if (date) {
+                setSelectedDay(date);
+                triggerAnimation();
+              }
+            }}
+            onDismiss={() => setShowDayPicker(false)}
+          />
+        )}
+
       </View>
     </SafeAreaView>
   );
@@ -520,7 +748,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: THEME.bg,
-
   },
   container: {
     flex: 1,
@@ -532,7 +759,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: 16,
-    paddingBottom: 24,
+    paddingBottom: 20,
   },
   backButton: {
     padding: 8,
@@ -544,25 +771,34 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  shopSelectorBtn: {
+  shopSelectorContainer: {
+    marginBottom: 16,
+  },
+  shopSelector: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: THEME.cardBg,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    paddingVertical: 14,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: THEME.border,
   },
+  shopSelectorLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
   shopSelectorText: {
     color: THEME.textMain,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
-    marginLeft: 12,
+    flex: 1,
   },
   timeRangeContainer: {
     marginBottom: 24,
-    marginHorizontal: -24, // Bleed to edges
+    marginHorizontal: -24,
   },
   timeRangeScroll: {
     paddingHorizontal: 24,
@@ -658,7 +894,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   cardHeader: {
-    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 12,
   },
   iconContainer: {
@@ -684,6 +922,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 20,
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   glassContainer: {
     borderRadius: 24,
@@ -692,7 +931,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)',
   },
   dropdownMenu: {
-    backgroundColor: 'rgba(28, 28, 30, 0.7)',
+    backgroundColor: 'rgba(28, 28, 30, 0.95)',
     paddingTop: 16,
   },
   dropdownTitle: {
@@ -720,5 +959,77 @@ const styles = StyleSheet.create({
   dropdownItemTextSelected: {
     color: THEME.accent,
     fontWeight: '600',
+  },
+  todayPillActiveGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(212, 175, 55, 0.15)',
+    borderWidth: 1,
+    borderColor: THEME.accent,
+    borderRadius: 20,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 10,
+  },
+  pillArrowBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pillCenterBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+  },
+  daySubBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: THEME.cardBg,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 20,
+    marginTop: -8,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  dayArrowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(212, 175, 55, 0.12)',
+  },
+  dayArrowText: {
+    color: THEME.accent,
+    fontSize: 12,
+    fontWeight: '600',
+    marginHorizontal: 3,
+  },
+  dayDateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    flexShrink: 1,
+  },
+  dayDateBadgeText: {
+    color: THEME.textMain,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  jumpTodayBtn: {
+    backgroundColor: THEME.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 4,
+  },
+  jumpTodayText: {
+    color: THEME.bg,
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

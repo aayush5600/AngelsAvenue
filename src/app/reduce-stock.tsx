@@ -7,6 +7,8 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, Timesta
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { auth, db } from '../firebaseConfig';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -63,6 +65,7 @@ export default function ReduceStockScreen() {
 
   const [userData, setUserData] = useState<any>(null);
   const [resolvedShopId, setResolvedShopId] = useState<string | null>(null);
+  const [isSalesman, setIsSalesman] = useState(false);
 
   // Dropdown State
   const [showDropdown, setShowDropdown] = useState(false);
@@ -73,14 +76,14 @@ export default function ReduceStockScreen() {
     if (!user) return;
 
     const initData = async () => {
-      let isSalesman = false;
+      let salesman = false;
       let shopId = user.uid;
       let uData: any = null;
 
       try {
         let docSnap = await getDoc(doc(db, 'salesmen', user.uid));
         if (docSnap.exists()) {
-          isSalesman = true;
+          salesman = true;
           uData = docSnap.data();
           shopId = uData.shopId;
         } else {
@@ -93,48 +96,56 @@ export default function ReduceStockScreen() {
         console.error("Error fetching user data", e);
       }
 
-      setUserData(uData);
-      setResolvedShopId(shopId);
-
-      if (!shopId) {
-        setLoading(false);
-        return;
+      const storedShopId = await SafeStorage.getItem('selectedShopId');
+      if (storedShopId && storedShopId !== 'all') {
+        shopId = storedShopId;
       }
 
-      // Listen to reductions
-      const ref = collection(db, 'shops', shopId, 'reduce_stock');
-      const q = query(ref, orderBy('date', 'desc'));
+      setUserData(uData);
+      setResolvedShopId(shopId);
+      setIsSalesman(salesman);
+    };
 
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        let data = snapshot.docs.map(d => {
-          const docData = d.data();
-          return {
-            id: d.id,
-            itemName: docData.itemName,
-            qty: docData.qty,
-            totalAmount: docData.totalAmount,
-            date: docData.date?.toDate ? docData.date.toDate() : new Date(),
-            salesmanId: docData.salesmanId,
-          };
-        });
+    initData();
+  }, []);
 
-        // If salesman, ONLY show their own reductions
-        if (isSalesman) {
-          data = data.filter((s: any) => s.salesmanId === user.uid);
-        }
+  // Listen to reductions for resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setReductions([]);
+      setLoading(false);
+      return;
+    }
 
-        setReductions(data);
-        setLoading(false);
+    setLoading(true);
+    const user = auth.currentUser;
+    const ref = collection(db, 'shops', resolvedShopId, 'reduce_stock');
+    const q = query(ref, orderBy('date', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let data = snapshot.docs.map(d => {
+        const docData = d.data();
+        return {
+          id: d.id,
+          itemName: docData.itemName,
+          qty: docData.qty,
+          totalAmount: docData.totalAmount,
+          date: docData.date?.toDate ? docData.date.toDate() : new Date(),
+          salesmanId: docData.salesmanId,
+        };
       });
 
-      return () => unsubscribe();
-    };
+      // If salesman, ONLY show their own reductions
+      if (isSalesman && user) {
+        data = data.filter((s: any) => s.salesmanId === user.uid);
+      }
 
-    const cleanupPromise = initData();
-    return () => {
-      cleanupPromise.then(cleanup => cleanup && cleanup());
-    };
-  }, []);
+      setReductions(data);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [resolvedShopId, isSalesman]);
 
   const filteredReductions = useMemo(() => {
     if (!isFilterActive) return reductions;
@@ -447,6 +458,15 @@ export default function ReduceStockScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Reduce Stock</Text>
         <View style={{ width: 40 }} />
+      </View>
+
+      {/* Shop Selector */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+        <ShopSelectorBar
+          compact
+          selectedShopId={resolvedShopId}
+          onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+        />
       </View>
 
       {/* Filter Section */}

@@ -7,6 +7,10 @@ import { collection, addDoc, query, orderBy, onSnapshot, doc, updateDoc, deleteD
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { auth, db } from '../firebaseConfig';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import NetInfo from '@react-native-community/netinfo';
+import { queueOfflineSale } from '../utils/OfflineSyncService';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -255,40 +259,42 @@ export default function SalesEntryScreen() {
         console.error("Error fetching user data", e);
       }
 
-      setUserData(uData);
-      setResolvedShopId(shopId);
-
-      if (!shopId) {
-        setLoading(false);
-        return;
+      const storedShopId = await SafeStorage.getItem('selectedShopId');
+      if (storedShopId && storedShopId !== 'all') {
+        shopId = storedShopId;
       }
 
-      const salesRef = collection(db, 'shops', shopId, 'sales');
-      const q = query(salesRef, orderBy('createdAt', 'desc'));
-
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        let salesData = snapshot.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }));
-
-        // If salesman, ONLY show their own sales
-        if (isSalesman) {
-          salesData = salesData.filter((s: any) => s.salesmanId === user.uid);
-        }
-
-        setSales(salesData);
-        setLoading(false);
-      });
-
-      return () => unsubscribe();
+      setUserData(uData);
+      setResolvedShopId(shopId);
     };
 
-    const cleanupPromise = initData();
-    return () => {
-      cleanupPromise.then(cleanup => cleanup && cleanup());
-    };
+    initData();
   }, []);
+
+  // Listen to sales for the resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setSales([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const salesRef = collection(db, 'shops', resolvedShopId, 'sales');
+    const q = query(salesRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let salesData = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+
+      setSales(salesData);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [resolvedShopId]);
 
   const computedTotal = items.reduce((sum, item) => {
     const p = parseFloat(item.price) || 0;
@@ -317,6 +323,44 @@ export default function SalesEntryScreen() {
 
     setSaving(true);
     try {
+      const netState = await NetInfo.fetch();
+      const isSalesman = userData?.role === 'Sales Man';
+      const parsedItems = items.map(i => ({
+        name: i.name.trim(),
+        price: parseFloat(i.price) || 0,
+        qty: parseFloat(i.qty) || 0
+      }));
+
+      if (!netState.isConnected) {
+        if (editingId) {
+          Alert.alert("Offline", "You cannot edit existing entries while offline. Please connect to the internet.");
+          setSaving(false);
+          return;
+        }
+
+        const salesRef = doc(collection(db, 'shops', resolvedShopId, 'sales'));
+        await queueOfflineSale({
+          id: salesRef.id,
+          shopId: resolvedShopId,
+          amount: finalAmount,
+          description,
+          paymentType,
+          createdAt: entryDate.toISOString(),
+          salesmanId: isSalesman ? user.uid : null,
+          salesmanName: isSalesman ? userData.name : 'Shop',
+          items: parsedItems
+        });
+
+        Alert.alert("Saved Offline", "No internet connection. Order has been saved offline and will sync when you are back online.");
+        setModalVisible(false);
+        setAmount('');
+        setDescription('');
+        setEditingId(null);
+        setItems([]);
+        setOriginalItems([]);
+        return;
+      }
+
       if (editingId && originalItems.length > 0) {
         await restoreStock(resolvedShopId, originalItems);
       }
@@ -368,12 +412,6 @@ export default function SalesEntryScreen() {
       }
 
       const dateToSave = Timestamp.fromDate(entryDate);
-      const isSalesman = userData?.role === 'Sales Man';
-      const parsedItems = items.map(i => ({
-        name: i.name.trim(),
-        price: parseFloat(i.price) || 0,
-        qty: parseFloat(i.qty) || 0
-      }));
 
       let saleId = editingId;
 
@@ -502,6 +540,15 @@ export default function SalesEntryScreen() {
           <TouchableOpacity onPress={() => setFilterMode(!filterMode)}>
             <Feather name="filter" size={24} color={(fromDate || toDate) ? THEME.accent : THEME.textMain} />
           </TouchableOpacity>
+        </View>
+
+        {/* Shop Selector */}
+        <View style={{ marginTop: 10 }}>
+          <ShopSelectorBar
+            compact
+            selectedShopId={resolvedShopId}
+            onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+          />
         </View>
 
         {filterMode && (

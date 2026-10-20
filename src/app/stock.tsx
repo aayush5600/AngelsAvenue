@@ -7,6 +7,8 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../firebaseConfig';
 import { collection, onSnapshot, query, orderBy, doc, getDoc } from 'firebase/firestore';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const TIME_RANGES = [
   { id: 'lifetime', label: 'Lifetime' },
@@ -101,41 +103,67 @@ export default function StockScreen() {
         console.error("Error fetching user data", e);
       }
 
-      setUserData(uData);
-      setResolvedShopId(shopId);
-
-      if (!shopId) {
-        setLoading(false);
-        return;
+      const storedShopId = await SafeStorage.getItem('selectedShopId');
+      if (storedShopId && storedShopId !== 'all') {
+        shopId = storedShopId;
       }
 
-      const billsRef = collection(db, 'shops', shopId, 'purchase_stock');
-      const q = query(billsRef, orderBy('createdAt', 'desc'));
+      setUserData(uData);
+      setResolvedShopId(shopId);
+    };
 
-      const unsub = onSnapshot(q, (snapshot) => {
-        let flattenedItems: any[] = [];
-        let raw: any[] = [];
-        let srCounter = 1;
+    initData();
+  }, []);
 
-        snapshot.docs.forEach(doc => {
-          raw.push({ id: doc.id, ...doc.data() });
-          const billData = doc.data();
-          
-          let purchaseDateStr = 'Unknown';
-          if (billData.purchaseDate?.toDate) {
-            purchaseDateStr = billData.purchaseDate.toDate().toLocaleDateString();
-          }
-          
-          if (billData.items && Array.isArray(billData.items)) {
-            billData.items.forEach((item: any) => {
-              const purchaseQty = item.qty || 0;
-              const sellQty = item.sellQty || 0;
-              const purchasePrice = item.price || 0;
+  // Subscribe to stock and reduce_stock for resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setStockItems([]);
+      setRawBills([]);
+      setReduceStockList([]);
+      setLoading(false);
+      return;
+    }
 
-              flattenedItems.push({
-                id: `${doc.id}-${srCounter}`,
-                sr: srCounter++,
-                name: item.name || 'Unknown',
+    setLoading(true);
+    const shopId = resolvedShopId;
+
+    const billsRef = collection(db, 'shops', shopId, 'purchase_stock');
+    const q = query(billsRef, orderBy('createdAt', 'desc'));
+
+    const unsub = onSnapshot(q, (snapshot) => {
+      let groupedItemsMap = new Map<string, any>();
+      let raw: any[] = [];
+
+      snapshot.docs.forEach(doc => {
+        raw.push({ id: doc.id, ...doc.data() });
+        const billData = doc.data();
+
+        let purchaseDateStr = 'Unknown';
+        if (billData.purchaseDate?.toDate) {
+          purchaseDateStr = billData.purchaseDate.toDate().toLocaleDateString();
+        }
+
+        if (billData.items && Array.isArray(billData.items)) {
+          billData.items.forEach((item: any) => {
+            const name = item.name || 'Unknown';
+            const purchasePrice = parseFloat(item.price) || 0;
+            const purchaseQty = parseFloat(item.qty) || 0;
+            const sellQty = item.sellQty || 0;
+
+            const key = `${name}-${purchasePrice}`;
+
+            if (groupedItemsMap.has(key)) {
+              const existing = groupedItemsMap.get(key);
+              existing.purchaseQty += purchaseQty;
+              existing.sellQty += sellQty;
+              existing.availableQty = existing.purchaseQty - existing.sellQty;
+              existing.totalPurchase = existing.purchaseQty * purchasePrice;
+              existing.availableValue = existing.availableQty * purchasePrice;
+            } else {
+              groupedItemsMap.set(key, {
+                id: key,
+                name,
                 purchaseQty,
                 sellQty,
                 availableQty: purchaseQty - sellQty,
@@ -144,42 +172,39 @@ export default function StockScreen() {
                 availableValue: (purchaseQty - sellQty) * purchasePrice,
                 purchaseDate: purchaseDateStr,
               });
-            });
-          }
-        });
-
-        // Sort items by available quantity (descending)
-        flattenedItems.sort((a, b) => b.availableQty - a.availableQty);
-
-        // Reassign serial numbers after sorting
-        flattenedItems.forEach((item, index) => {
-          item.sr = index + 1;
-        });
-
-        setRawBills(raw);
-        setStockItems(flattenedItems);
-        setLoading(false);
+            }
+          });
+        }
       });
 
-      // Also fetch reduce_stock for selling history
-      const reduceRef = collection(db, 'shops', shopId, 'reduce_stock');
-      const rq = query(reduceRef, orderBy('date', 'desc'));
-      const unsubReduce = onSnapshot(rq, (snapshot) => {
-        const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        setReduceStockList(data);
+      let flattenedItems = Array.from(groupedItemsMap.values());
+
+      // Sort items by available quantity (descending)
+      flattenedItems.sort((a, b) => b.availableQty - a.availableQty);
+
+      // Reassign serial numbers after sorting
+      flattenedItems.forEach((item, index) => {
+        item.sr = index + 1;
       });
 
-      return () => {
-        unsub();
-        unsubReduce();
-      };
-    };
+      setRawBills(raw);
+      setStockItems(flattenedItems);
+      setLoading(false);
+    });
 
-    const cleanupPromise = initData();
+    // Also fetch reduce_stock for selling history
+    const reduceRef = collection(db, 'shops', shopId, 'reduce_stock');
+    const rq = query(reduceRef, orderBy('date', 'desc'));
+    const unsubReduce = onSnapshot(rq, (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setReduceStockList(data);
+    });
+
     return () => {
-      cleanupPromise.then(cleanup => cleanup && cleanup());
+      unsub();
+      unsubReduce();
     };
-  }, []);
+  }, [resolvedShopId]);
 
   const filteredHistoryBills = React.useMemo(() => {
     const now = new Date();
@@ -369,6 +394,15 @@ export default function StockScreen() {
         <View style={styles.headerButton} />
       </Animated.View>
 
+      {/* Shop Selector */}
+      <Animated.View entering={FadeInDown.delay(50).duration(600)} style={{ paddingHorizontal: 16, marginTop: 12 }}>
+        <ShopSelectorBar
+          compact
+          selectedShopId={resolvedShopId}
+          onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+        />
+      </Animated.View>
+
       <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.tabContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScrollContent}>
           <TouchableOpacity
@@ -455,7 +489,9 @@ export default function StockScreen() {
                         <Text style={styles.tableCellText}>{item.sr}</Text>
                       </View>
                       <View style={[styles.tableCell, { width: COLUMNS[1].width }]}>
-                        <Text style={[styles.tableCellText, { fontWeight: '600', color: THEME.textMain }]}>{item.name}</Text>
+                        <Text style={[styles.tableCellText, { fontWeight: '600', color: THEME.textMain }]}>
+                          {item.name}
+                        </Text>
                       </View>
                       <View style={[styles.tableCell, { width: COLUMNS[2].width }]}>
                         <Text style={styles.tableCellText}>{item.purchaseQty}</Text>
@@ -759,10 +795,14 @@ export default function StockScreen() {
                       backgroundColor: THEME.cardBg,
                       padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: THEME.border
                     }}>
-                      <Text style={{ color: THEME.textMain, fontSize: 16, fontWeight: '600', marginBottom: 8 }}>{item.name}</Text>
+                      <Text style={{ color: THEME.textMain, fontSize: 16, fontWeight: '600', marginBottom: 8 }}>
+                        {item.name} {item.isReturn ? <Text style={{color: '#ff4444'}}>(Returned)</Text> : null}
+                      </Text>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <Text style={{ color: THEME.textSub, fontSize: 14 }}>{item.qty} x ₹{(item.price || 0).toLocaleString()}</Text>
-                        <Text style={{ color: THEME.textMain, fontSize: 14, fontWeight: '700' }}>₹{((item.qty || 0) * (item.price || 0)).toLocaleString()}</Text>
+                        <Text style={{ color: THEME.textSub, fontSize: 14 }}>{Math.abs(item.qty)} x ₹{(item.price || 0).toLocaleString()}</Text>
+                        <Text style={{ color: item.isReturn ? '#ff4444' : THEME.textMain, fontSize: 14, fontWeight: '700' }}>
+                          {item.isReturn ? '-' : ''}₹{(Math.abs(item.qty || 0) * (item.price || 0)).toLocaleString()}
+                        </Text>
                       </View>
                       {item.remark ? (
                         <Text style={{ color: THEME.textSub, fontSize: 13, marginTop: 4, fontStyle: 'italic' }}>{item.remark}</Text>
@@ -928,7 +968,7 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.bg,
   },
   tableRowAlt: {
-    backgroundColor: THEME.cardBgAlt,
+    backgroundColor: THEME.cardBg,
   },
   tableCell: {
     paddingVertical: 16,

@@ -7,6 +7,8 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, serverTimestamp,
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { auth, db } from '../firebaseConfig';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import { SafeStorage } from '../utils/Storage';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -88,47 +90,49 @@ export default function ShopExpenseScreen() {
         console.error("Error fetching user data", e);
       }
 
+      const storedShopId = await SafeStorage.getItem('selectedShopId');
+      if (storedShopId) {
+        shopId = storedShopId;
+      }
+
       setUserData(uData);
       setResolvedShopId(shopId);
       setIsSalesman(salesman);
+    };
 
-      if (!shopId) {
-        setLoading(false);
-        return;
-      }
+    initData();
+  }, []);
 
-      const ref = collection(db, 'shops', shopId, 'shop_expense');
-      const q = query(ref, orderBy('date', 'desc'));
+  // Listen to shop expenses for the resolvedShopId
+  useEffect(() => {
+    if (!resolvedShopId) {
+      setLoading(false);
+      return;
+    }
 
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        let data = snapshot.docs.map(doc => {
-          const d = doc.data();
-          return {
-            id: doc.id,
-            title: d.title,
-            amount: d.amount,
-            date: d.date?.toDate ? d.date.toDate() : new Date(),
-            salesmanId: d.salesmanId,
-            salesmanName: d.salesmanName,
-          };
-        });
+    setLoading(true);
+    const ref = collection(db, 'shops', resolvedShopId, 'shop_expense');
+    const q = query(ref, orderBy('date', 'desc'));
 
-        if (salesman) {
-          data = data.filter((s: any) => s.salesmanId === user.uid);
-        }
-
-        setExpenses(data);
-        setLoading(false);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let data = snapshot.docs.map(doc => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          title: d.title,
+          amount: d.amount,
+          date: d.date?.toDate ? d.date.toDate() : new Date(),
+          salesmanId: d.salesmanId,
+          salesmanName: d.salesmanName,
+        };
       });
 
-      return () => unsubscribe();
-    };
+      setExpenses(data);
+      setLoading(false);
+    });
 
-    const cleanupPromise = initData();
-    return () => {
-      cleanupPromise.then(cleanup => cleanup && cleanup());
-    };
-  }, []);
+    return () => unsubscribe();
+  }, [resolvedShopId]);
 
   const filteredExpenses = useMemo(() => {
     if (!isFilterActive) return expenses;
@@ -284,7 +288,22 @@ export default function ShopExpenseScreen() {
           <Feather name="arrow-left" size={24} color={THEME.textMain} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Shop Expense</Text>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity
+          style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(212, 175, 55, 0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: THEME.accent }}
+          onPress={() => router.push('/notes' as any)}
+        >
+          <Feather name="file-text" size={14} color={THEME.accent} style={{ marginRight: 6 }} />
+          <Text style={{ color: THEME.accent, fontWeight: '700', fontSize: 13 }}>Notes</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Shop Selector */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+        <ShopSelectorBar
+          compact
+          selectedShopId={resolvedShopId}
+          onShopChange={(newShopId) => setResolvedShopId(newShopId)}
+        />
       </View>
 
       {/* Filter Section */}

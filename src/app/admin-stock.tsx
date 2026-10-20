@@ -6,6 +6,7 @@ import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
 import { collection, collectionGroup, onSnapshot } from 'firebase/firestore';
+import ShopSelectorBar from '../components/ShopSelectorBar';
 
 const THEME = {
   bg: '#121212',
@@ -143,16 +144,16 @@ export default function AdminStockScreen() {
       ) : (
         <View style={styles.container}>
           
-          <Animated.View entering={FadeInDown.duration(400)} style={styles.shopSelectorContainer}>
-            <TouchableOpacity 
-              style={styles.shopSelector}
-              onPress={() => setShopDropdownVisible(true)}
-              activeOpacity={0.7}
-            >
-              <Feather name="home" size={20} color={THEME.accent} />
-              <Text style={styles.shopSelectorText}>{selectedShopName}</Text>
-              <Feather name="chevron-down" size={20} color={THEME.textSub} />
-            </TouchableOpacity>
+          <Animated.View entering={FadeInDown.duration(400)} style={{ marginBottom: 12 }}>
+            <ShopSelectorBar
+              compact
+              allowAll
+              selectedShopId={selectedShopId}
+              onShopChange={(newShopId, shop) => {
+                setSelectedShopId(newShopId);
+                setSelectedShopName(shop.name);
+              }}
+            />
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(100).duration(500)} style={{ marginBottom: 16, flexDirection: 'row', gap: 12 }}>
@@ -208,34 +209,7 @@ export default function AdminStockScreen() {
         </View>
       )}
 
-      <Modal visible={shopDropdownVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Shop</Text>
-              <TouchableOpacity onPress={() => setShopDropdownVisible(false)}>
-                <Feather name="x" size={24} color={THEME.textMain} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 300 }}>
-              {shops.map((shop) => (
-                <TouchableOpacity
-                  key={shop.id}
-                  style={styles.dropdownItem}
-                  onPress={() => {
-                    setSelectedShopId(shop.id);
-                    setSelectedShopName(shop.name);
-                    setShopDropdownVisible(false);
-                  }}
-                >
-                  <Text style={[styles.dropdownItemText, selectedShopId === shop.id && { color: THEME.accent }]}>{shop.name}</Text>
-                  {selectedShopId === shop.id && <Feather name="check" size={20} color={THEME.accent} />}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+
 
     </SafeAreaView>
   );
